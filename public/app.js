@@ -117,9 +117,43 @@ async function loadBusinessUnits() {
   state.businessUnits = await api('/business-units');
   const sel = document.getElementById('buSelect');
   sel.innerHTML = state.businessUnits.map(bu => `<option value="${bu.id}">${bu.name}</option>`).join('');
-  state.selectedBU = state.businessUnits[0]?.id || null;
+  state.selectedBU = state.selectedBU && state.businessUnits.some(b => b.id === state.selectedBU) ? state.selectedBU : (state.businessUnits[0]?.id || null);
   sel.value = state.selectedBU;
   sel.onchange = () => { state.selectedBU = Number(sel.value); renderView(); };
+}
+
+function newBusinessUnitModal() {
+  openModal(`
+    <h2>Nueva unidad de negocio</h2>
+    <div class="field"><label>Nombre</label><input id="f_bu_name" placeholder="Ej: Nueva Sucursal"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="createBusinessUnit()">Guardar</button>
+    </div>
+  `);
+}
+async function createBusinessUnit() {
+  try {
+    const bu = await api('/business-units', { method: 'POST', body: JSON.stringify({ name: document.getElementById('f_bu_name').value }) });
+    closeModal();
+    toast('Unidad de negocio creada.');
+    await loadBusinessUnits();
+    state.selectedBU = bu.id;
+    document.getElementById('buSelect').value = bu.id;
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteCurrentBusinessUnit() {
+  const bu = state.businessUnits.find(b => b.id === state.selectedBU);
+  if (!bu) return;
+  if (!confirm(`¿Eliminar la unidad de negocio "${bu.name}"? Esta acción no se puede deshacer.`)) return;
+  try {
+    await api(`/business-units/${bu.id}`, { method: 'DELETE' });
+    toast('Unidad de negocio eliminada.');
+    await loadBusinessUnits();
+    await loadMasterData();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function loadMasterData() {
@@ -139,7 +173,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -169,6 +203,7 @@ async function renderView() {
       case 'projects': return renderProjects();
       case 'cash': return renderCash();
       case 'users': return renderUsers();
+      case 'debtors': return renderDebtors();
     }
   } catch (e) {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
@@ -419,8 +454,9 @@ async function renderWarehouses() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newWarehouseModal()">+ Nuevo depósito</button>`;
   const el = document.getElementById('view');
   const rows = whByBU();
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Estado'], (w) => `
-    <tr><td>${w.name}</td><td>${w.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td></tr>`,
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Estado', ''], (w) => `
+    <tr><td>${w.name}</td><td>${w.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('warehouses', ${w.id}, '${w.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
     'No hay depósitos en esta unidad.')}</div>`;
 }
 function newWarehouseModal() {
@@ -443,13 +479,25 @@ async function createWarehouse() {
 // ---------------------------------------------------------
 // PROVEEDORES / CLIENTES
 // ---------------------------------------------------------
+async function deleteEntity(kind, id, name) {
+  if (!confirm(`¿Eliminar "${name}"? Esta acción no se puede deshacer.`)) return;
+  try {
+    await api(`/${kind}/${id}`, { method: 'DELETE' });
+    toast('Eliminado correctamente.');
+    await loadMasterData();
+    if (kind === 'business-units') await loadBusinessUnits();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function renderSuppliers() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newContactModal('supplier')">+ Nuevo proveedor</button>`;
   const el = document.getElementById('view');
   const rows = state.cache.suppliers;
   const balances = await Promise.all(rows.map(s => api(`/suppliers/${s.id}/balance`)));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.'], (s, i) => `
-    <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(s)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(s)]?.balance || 0)}</td></tr>`,
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (s) => `
+    <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(s)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(s)]?.balance || 0)}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
     'No hay proveedores cargados.')}</div>`;
 }
 async function renderCustomers() {
@@ -457,8 +505,9 @@ async function renderCustomers() {
   const el = document.getElementById('view');
   const rows = state.cache.customers;
   const balances = await Promise.all(rows.map(c => api(`/customers/${c.id}/balance`)));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.'], (c) => `
-    <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(c)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(c)]?.balance || 0)}</td></tr>`,
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (c) => `
+    <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(c)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(c)]?.balance || 0)}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
     'No hay clientes cargados.')}</div>`;
 }
 function newContactModal(kind) {
@@ -501,12 +550,13 @@ async function renderProjects() {
   const el = document.getElementById('view');
   const profitability = await api('/projects/profitability');
   const rows = projByBU().map(p => ({ ...p, profit: profitability.find(x => x.project_id === p.id) }));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Ingresos', 'Egresos', 'Resultado'], (p) => `
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Ingresos', 'Egresos', 'Resultado', ''], (p) => `
     <tr>
       <td>${p.name}</td>
       <td class="num income">$ ${fmtMoney(p.profit?.total_income || 0)}</td>
       <td class="num expense">$ ${fmtMoney(p.profit?.total_expense || 0)}</td>
       <td class="num ${Number(p.profit?.net_result || 0) >= 0 ? 'income' : 'expense'}">$ ${fmtMoney(p.profit?.net_result || 0)}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('projects', ${p.id}, '${p.name.replace(/'/g, "\\'")}')">Eliminar</button></td>
     </tr>`, 'No hay proyectos en esta unidad.')}</div>`;
 }
 function newProjectModal() {
@@ -541,7 +591,7 @@ async function renderPurchases() {
       <td>${statusBadge(p.status)}</td>
       <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
       <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
-      <td>${opActions('purchases', p)}</td>
+      <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
     </tr>`, 'No hay compras registradas en esta unidad.')}</div>`;
 }
 
@@ -567,7 +617,7 @@ async function renderSales() {
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
           <td>${collectionBadge(s.collection_status)}</td>
-          <td><button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button></td>
+          <td>${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : '-'}</td>
         </tr>`, '')}
     </div>` : ''}
 
@@ -580,7 +630,7 @@ async function renderSales() {
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
           <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
-          <td>${opActions('sales', s)}</td>
+          <td>${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button></td>
         </tr>`, 'No hay ventas registradas en esta unidad.')}
     </div>
   `;
@@ -668,6 +718,73 @@ async function cancelOperation(kind, id) {
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
+async function deleteOperation(kind, id) {
+  const label = kind === 'purchases' ? 'la compra' : 'la venta';
+  if (!confirm(`¿Eliminar ${label} #${id}? Esta acción no se puede deshacer y borra su historial asociado.`)) return;
+  try {
+    await api(`/${kind}/${id}`, { method: 'DELETE' });
+    toast('Eliminado correctamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---------------------------------------------------------
+// DEUDORES
+// ---------------------------------------------------------
+async function renderDebtors() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+  const [pending, all] = await Promise.all([api('/sales/pending-collection'), api('/sales')]);
+  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU);
+
+  const byCustomer = {};
+  pendingBU.forEach(s => {
+    const sale = all.find(a => a.id === s.id) || s;
+    const custId = sale.customer_id;
+    if (!byCustomer[custId]) byCustomer[custId] = { customer_id: custId, sales: [], total: 0 };
+    byCustomer[custId].sales.push(s);
+    byCustomer[custId].total += Number(s.remaining_amount);
+  });
+  const groups = Object.values(byCustomer);
+
+  const totalDebt = pendingBU.reduce((a, s) => a + Number(s.remaining_amount), 0);
+
+  el.innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Total adeudado</div><div class="kpi-value expense">$ ${fmtMoney(totalDebt)}</div></div>
+      <div class="kpi"><div class="kpi-label">Clientes deudores</div><div class="kpi-value">${groups.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Facturas pendientes</div><div class="kpi-value">${pendingBU.length}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Deuda por cliente</div>
+      ${tableOrEmpty(groups, ['Cliente', 'Facturas', 'Deuda total'], (g) => `
+        <tr>
+          <td>${customerName(g.customer_id)}</td>
+          <td class="mono">${g.sales.length}</td>
+          <td class="num expense">$ ${fmtMoney(g.total)}</td>
+        </tr>`, 'No hay deuda pendiente en esta unidad.')}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Detalle de facturas pendientes</div>
+      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+        <tr>
+          <td class="mono">#${s.id}</td>
+          <td>${customerName(s.customer_id)}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td class="num">$ ${fmtMoney(s.total_amount)}</td>
+          <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
+          <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
+          <td>${collectionBadge(s.collection_status)}</td>
+          <td>${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : '-'}</td>
+        </tr>`, 'No hay facturas pendientes de cobro en esta unidad.')}
+    </div>
+  `;
+}
+function customerName(id) {
+  return state.cache.customers.find(c => c.id === id)?.name || `Cliente #${id}`;
+}
 
 let lineItemCount = 0;
 function newOperationModal(kind) {
@@ -688,11 +805,15 @@ function newOperationModal(kind) {
       <div class="field"><label>Proyecto (opcional)</label><select id="f_project">${projOptions}</select></div>
     </div>
     <div class="field"><label>Forma de pago</label>
-      <select id="f_payment">
-        <option value="CASH">Contado (caja)</option>
+      <select id="f_payment" onchange="togglePaymentBoxField()">
+        <option value="CASH">Contado</option>
         <option value="ACCOUNT">Cuenta corriente</option>
         ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
       </select>
+    </div>
+    <div class="field" id="paymentBoxField">
+      <label>Caja o sobre de destino</label>
+      <select id="f_cashbox">${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})</option>`).join('')}</select>
     </div>
 
     <div class="field"><label>Artículos</label>
@@ -706,6 +827,11 @@ function newOperationModal(kind) {
     </div>
   `);
   addLineItem(kind);
+}
+
+function togglePaymentBoxField() {
+  const val = document.getElementById('f_payment').value;
+  document.getElementById('paymentBoxField').style.display = val === 'CASH' ? 'block' : 'none';
 }
 
 function addLineItem(kind) {
@@ -750,6 +876,7 @@ async function createOperation(kind) {
     warehouse_id: Number(document.getElementById('f_warehouse').value),
     project_id: document.getElementById('f_project').value ? Number(document.getElementById('f_project').value) : null,
     payment_type: document.getElementById('f_payment').value,
+    cash_box_id: document.getElementById('f_payment').value === 'CASH' ? Number(document.getElementById('f_cashbox').value) : null,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(document.getElementById('f_contact').value);
@@ -766,35 +893,41 @@ async function createOperation(kind) {
 // CAJA
 // ---------------------------------------------------------
 async function renderCash() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="openCashSessionModal()">+ Abrir caja</button>`;
+  document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
   const dashboard = await api('/cash-boxes/dashboard');
+  const cajas = dashboard.filter(b => b.kind === 'CAJA');
+  const sobres = dashboard.filter(b => b.kind === 'SOBRE');
+
+  const tile = (b) => `
+    <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}" onclick="selectCashBoxFilter(${b.cash_box_id})">
+      <div class="cashbox-tile-name">${b.name}</div>
+      <div class="cashbox-tile-balance">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
+      <div class="cashbox-tile-meta">
+        <span class="income">+${fmtMoney(b.total_income)}</span>
+        <span class="expense">−${fmtMoney(b.total_expense)}</span>
+      </div>
+      <div class="cashbox-tile-currency">${b.currency}</div>
+    </div>`;
 
   el.innerHTML = `
     <div class="card">
-      <div class="card-title">Dashboard de cajas</div>
-      <div class="cashbox-grid">
-        ${dashboard.map(b => `
-          <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}" onclick="selectCashBoxFilter(${b.cash_box_id})">
-            <div class="cashbox-tile-name">${b.name}</div>
-            <div class="cashbox-tile-balance">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
-            <div class="cashbox-tile-meta">
-              <span class="income">+${fmtMoney(b.total_income)}</span>
-              <span class="expense">−${fmtMoney(b.total_expense)}</span>
-            </div>
-            <div class="cashbox-tile-currency">${b.currency}</div>
-          </div>
-        `).join('')}
-      </div>
+      <div class="card-title">Cajas</div>
+      <div class="cashbox-grid">${cajas.map(tile).join('')}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Sobres</div>
+      <div class="cashbox-grid">${sobres.map(tile).join('')}</div>
     </div>
 
     <div class="card">
-      <div class="card-title">Movimientos por caja</div>
+      <div class="card-title">Movimientos por caja o sobre</div>
       <div class="field" style="max-width:280px">
-        <label>Filtrar por caja</label>
+        <label>Filtrar</label>
         <select id="cashFilterSelect" onchange="loadCashBoxMovements()">
-          <option value="">— Seleccioná una caja —</option>
-          ${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}
+          <option value="">— Seleccioná —</option>
+          <optgroup label="Cajas">${state.cache.cashBoxes.filter(b => b.kind === 'CAJA').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
+          <optgroup label="Sobres">${state.cache.cashBoxes.filter(b => b.kind === 'SOBRE').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
         </select>
       </div>
       <div id="cashMovementsResult"></div>
@@ -803,7 +936,9 @@ async function renderCash() {
     <div class="card">
       <div class="card-title">Registrar movimiento manual</div>
       <div class="field-row">
-        <div class="field"><label>ID de sesión de caja</label><input id="f_session_id" type="number" placeholder="Ej: 1"></div>
+        <div class="field"><label>Caja o sobre</label>
+          <select id="f_mov_box">${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'})</option>`).join('')}</select>
+        </div>
         <div class="field"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
       </div>
       <div class="field-row">
@@ -812,15 +947,6 @@ async function renderCash() {
       </div>
       <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
       <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
-      <div class="hint">Necesitás el ID de una sesión de caja abierta.</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Consultar resumen / cerrar sesión</div>
-      <div class="field-row">
-        <div class="field"><label>ID de sesión</label><input id="f_summary_id" type="number" placeholder="Ej: 1"></div>
-        <div class="field"><label>&nbsp;</label><button class="btn" style="width:100%" onclick="loadCashSummary()">Ver resumen</button></div>
-      </div>
-      <div id="cashSummaryResult"></div>
     </div>
   `;
 }
@@ -839,44 +965,20 @@ async function loadCashBoxMovements() {
   resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
     <tr>
       <td class="mono">${new Date(m.created_at).toLocaleString('es-AR')}</td>
-      <td>${m.business_unit_name}</td>
+      <td>${m.business_unit_name || '-'}</td>
       <td>${m.type === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
       <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
       <td>${m.description || '-'}</td>
       <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
     </tr>`, 'Esta caja no tiene movimientos registrados.');
 }
-function openCashSessionModal() {
-  const boxOptions = state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
-  openModal(`
-    <h2>Abrir sesión de caja</h2>
-    <div class="field"><label>Caja</label><select id="f_box">${boxOptions}</select></div>
-    <div class="field"><label>Monto de apertura</label><input id="f_opening" type="number" step="0.01" value="0"></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="createCashSession()">Abrir</button>
-    </div>
-  `);
-}
-async function createCashSession() {
-  try {
-    const r = await api('/cash-sessions/open', {
-      method: 'POST',
-      body: JSON.stringify({
-        cash_box_id: Number(document.getElementById('f_box').value),
-        business_unit_id: state.selectedBU,
-        opening_amount: Number(document.getElementById('f_opening').value),
-      }),
-    });
-    closeModal(); toast(`Sesión de caja abierta con ID ${r.id}.`);
-  } catch (e) { toast(e.message, 'error'); }
-}
+
 async function createCashMovement() {
   try {
     await api('/cash-movements', {
       method: 'POST',
       body: JSON.stringify({
-        cash_session_id: Number(document.getElementById('f_session_id').value),
+        cash_box_id: Number(document.getElementById('f_mov_box').value),
         business_unit_id: state.selectedBU,
         project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
         type: document.getElementById('f_mov_type').value,
@@ -885,39 +987,7 @@ async function createCashMovement() {
       }),
     });
     toast('Movimiento registrado.');
-    document.getElementById('f_mov_amount').value = '';
-    document.getElementById('f_mov_desc').value = '';
-  } catch (e) { toast(e.message, 'error'); }
-}
-async function loadCashSummary() {
-  const id = document.getElementById('f_summary_id').value;
-  if (!id) return;
-  try {
-    const s = await api(`/cash-sessions/${id}/summary`);
-    document.getElementById('cashSummaryResult').innerHTML = `
-      <table class="ledger" style="margin-top:12px">
-        <tbody>
-          <tr><td>Caja</td><td class="num">${s.cash_box_name}</td></tr>
-          <tr><td>Estado</td><td class="num">${statusBadge(s.status)}</td></tr>
-          <tr><td>Apertura</td><td class="num">$ ${fmtMoney(s.opening_amount)}</td></tr>
-          <tr><td>Ingresos</td><td class="num income">$ ${fmtMoney(s.total_income)}</td></tr>
-          <tr><td>Egresos</td><td class="num expense">$ ${fmtMoney(s.total_expense)}</td></tr>
-          <tr><td>Saldo esperado</td><td class="num">$ ${fmtMoney(s.expected_closing_amount)}</td></tr>
-          <tr><td>Cierre declarado</td><td class="num">${s.closing_amount != null ? '$ ' + fmtMoney(s.closing_amount) : '—'}</td></tr>
-        </tbody>
-      </table>
-      ${s.status === 'OPEN' ? `
-        <div class="field" style="margin-top:12px"><label>Monto de arqueo (cierre)</label><input id="f_closing_amount" type="number" step="0.01" value="${s.expected_closing_amount}"></div>
-        <button class="btn btn-primary" onclick="closeCashSession(${s.session_id})">Cerrar caja</button>
-      ` : ''}
-    `;
-  } catch (e) { toast(e.message, 'error'); }
-}
-async function closeCashSession(id) {
-  try {
-    await api(`/cash-sessions/${id}/close`, { method: 'POST', body: JSON.stringify({ closing_amount: Number(document.getElementById('f_closing_amount').value) }) });
-    toast('Caja cerrada.');
-    loadCashSummary();
+    renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
