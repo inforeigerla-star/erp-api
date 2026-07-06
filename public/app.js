@@ -257,7 +257,7 @@ async function renderDashboard() {
         (o) => `
         <tr>
           <td>${o.kind}</td>
-          <td class="mono">${new Date(o.date).toLocaleString('es-AR')}</td>
+          <td class="mono">${new Date(o.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
           <td>${statusBadge(o.status)}</td>
           <td class="num">$ ${fmtMoney(o.total_amount)}</td>
         </tr>`, 'Sin operaciones registradas.')}
@@ -310,7 +310,7 @@ async function showKardex(articleId, name) {
     <h2>Kardex — ${name}</h2>
     ${tableOrEmpty(rows, ['Fecha', 'Depósito', 'Tipo', 'Cantidad', 'Origen'], (m) => `
       <tr>
-        <td class="mono">${new Date(m.created_at).toLocaleString('es-AR')}</td>
+        <td class="mono">${new Date(m.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
         <td>${m.warehouse_name}</td>
         <td>${m.type === 'IN' ? 'Entrada' : 'Salida'}</td>
         <td class="num ${m.type === 'IN' ? 'income' : 'expense'}">${fmtQty(m.quantity)}</td>
@@ -372,15 +372,15 @@ function newArticleModal() {
           <option value="USD">Dólares (USD)</option>
         </select>
       </div>
-      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" oninput="updatePricePreview()"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
-      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
-      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" value="21" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" oninput="updatePricePreview()"></div>
     </div>
 
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
@@ -587,7 +587,7 @@ async function renderPurchases() {
   el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
     <tr>
       <td class="mono">#${p.id}</td>
-      <td class="mono">${new Date(p.date).toLocaleString('es-AR')}</td>
+      <td class="mono">${new Date(p.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
       <td>${statusBadge(p.status)}</td>
       <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
       <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
@@ -609,10 +609,12 @@ async function renderSales() {
     ${pendingBU.length ? `
     <div class="card">
       <div class="card-title">Facturas pendientes de procesar (cobradas fuera del sistema)</div>
-      ${tableOrEmpty(pendingBU, ['#', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td>${customerName(s.customer_id)}</td>
+          <td class="mono">${customerTaxId(s.customer_id)}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
           <td class="num">$ ${fmtMoney(s.total_amount)}</td>
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
@@ -623,10 +625,12 @@ async function renderSales() {
 
     <div class="card">
       <div class="card-title">Todas las ventas</div>
-      ${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td>${customerName(s.customer_id)}</td>
+          <td class="mono">${customerTaxId(s.customer_id)}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
           <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
@@ -634,6 +638,9 @@ async function renderSales() {
         </tr>`, 'No hay ventas registradas en esta unidad.')}
     </div>
   `;
+}
+function customerTaxId(id) {
+  return state.cache.customers.find(c => c.id === id)?.tax_id || '-';
 }
 
 function paymentTypeLabel(t) {
@@ -768,11 +775,12 @@ async function renderDebtors() {
 
     <div class="card">
       <div class="card-title">Detalle de facturas pendientes</div>
-      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td class="mono">${customerTaxId(s.customer_id)}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
           <td class="num">$ ${fmtMoney(s.total_amount)}</td>
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
@@ -837,33 +845,72 @@ function togglePaymentBoxField() {
 function addLineItem(kind) {
   const isPurchase = kind === 'purchase';
   const id = lineItemCount++;
-  const artOptions = artByBU().map(a => `<option value="${a.article_id}" data-price="${isPurchase ? a.list_cost : a.final_price}">${a.code} — ${a.description}</option>`).join('');
   const container = document.getElementById('lineItems');
   const row = document.createElement('div');
   row.className = 'line-item-row';
   row.id = `line_${id}`;
   row.innerHTML = `
-    <select onchange="autofillPrice(this, ${id})">${artOptions || '<option value="">— sin artículos —</option>'}</select>
+    <div class="article-search-wrap">
+      <input type="text" class="article-search-input" id="artsearch_${id}" placeholder="Buscar por código, código alt. o nombre…"
+             autocomplete="off" oninput="filterArticleOptions(${id}, ${isPurchase})" onfocus="filterArticleOptions(${id}, ${isPurchase})">
+      <input type="hidden" id="artid_${id}">
+      <div class="article-search-results" id="artresults_${id}"></div>
+    </div>
     <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1">
     <input type="number" step="0.01" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}">
     <button class="remove-line" onclick="document.getElementById('line_${id}').remove()">×</button>
   `;
   container.appendChild(row);
-  autofillPrice(row.querySelector('select'), id);
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest(`#line_${id}`)) {
+      const r = document.getElementById(`artresults_${id}`);
+      if (r) r.style.display = 'none';
+    }
+  });
 }
-function autofillPrice(selectEl, id) {
-  const opt = selectEl.selectedOptions[0];
-  if (opt && opt.dataset.price) document.getElementById(`price_${id}`).value = Number(opt.dataset.price).toFixed(2);
+
+function filterArticleOptions(id, isPurchase) {
+  const query = document.getElementById(`artsearch_${id}`).value.trim().toLowerCase();
+  const resultsEl = document.getElementById(`artresults_${id}`);
+  const articles = artByBU();
+
+  const matches = query
+    ? articles.filter(a =>
+        (a.code || '').toLowerCase().includes(query) ||
+        (a.alt_code || '').toLowerCase().includes(query) ||
+        (a.description || '').toLowerCase().includes(query))
+    : articles;
+
+  if (!matches.length) {
+    resultsEl.innerHTML = `<div class="article-search-empty">Sin resultados</div>`;
+  } else {
+    resultsEl.innerHTML = matches.slice(0, 30).map(a => `
+      <div class="article-search-item" onclick="selectArticleOption(${id}, ${a.article_id}, ${isPurchase})">
+        <span class="article-search-code">${a.code}${a.alt_code ? ' · ' + a.alt_code : ''}</span>
+        <span class="article-search-desc">${a.description}</span>
+      </div>
+    `).join('');
+  }
+  resultsEl.style.display = 'block';
+}
+
+function selectArticleOption(id, articleId, isPurchase) {
+  const article = artByBU().find(a => a.article_id === articleId);
+  if (!article) return;
+  document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
+  document.getElementById(`artid_${id}`).value = articleId;
+  document.getElementById(`price_${id}`).value = Number(isPurchase ? article.list_cost : article.final_price).toFixed(2);
+  document.getElementById(`artresults_${id}`).style.display = 'none';
 }
 
 async function createOperation(kind) {
   const isPurchase = kind === 'purchase';
   const rows = [...document.getElementById('lineItems').children];
   const items = rows.map(row => {
-    const select = row.querySelector('select');
     const idMatch = row.id.replace('line_', '');
     return {
-      article_id: Number(select.value),
+      article_id: Number(document.getElementById(`artid_${idMatch}`).value),
       quantity: Number(document.getElementById(`qty_${idMatch}`).value),
       [isPurchase ? 'unit_cost' : 'unit_price']: Number(document.getElementById(`price_${idMatch}`).value),
     };
@@ -964,7 +1011,7 @@ async function loadCashBoxMovements() {
   const rows = await api(`/cash-boxes/${id}/movements`);
   resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
     <tr>
-      <td class="mono">${new Date(m.created_at).toLocaleString('es-AR')}</td>
+      <td class="mono">${new Date(m.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
       <td>${m.business_unit_name || '-'}</td>
       <td>${m.type === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
       <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
