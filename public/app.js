@@ -6,19 +6,64 @@ const state = {
   selectedBU: null,
   view: 'dashboard',
   cache: {}, // suppliers, customers, warehouses, articles, projects, cashBoxes
+  currentUser: null,
 };
 
 const fmtMoney = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtQty = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 
 // ---------------------------------------------------------
+// Auth
+// ---------------------------------------------------------
+function getToken() { return sessionStorage.getItem('erp_token'); }
+function setToken(t) { sessionStorage.setItem('erp_token', t); }
+function clearToken() { sessionStorage.removeItem('erp_token'); }
+
+async function doLogin() {
+  const username = document.getElementById('loginUser').value;
+  const password = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error || 'Error al ingresar'; return; }
+    setToken(data.token);
+    state.currentUser = data.user;
+    await boot();
+  } catch (e) {
+    errEl.textContent = 'No se pudo conectar con el servidor.';
+  }
+}
+function doLogout() {
+  clearToken();
+  state.currentUser = null;
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+}
+
+// ---------------------------------------------------------
 // API helper
 // ---------------------------------------------------------
 async function api(path, opts = {}) {
+  const token = getToken();
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...opts,
   });
+  if (res.status === 401) {
+    doLogout();
+    throw new Error('Sesión expirada. Volvé a ingresar.');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Error de red');
   return data;
@@ -94,7 +139,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -123,6 +168,7 @@ async function renderView() {
       case 'customers': return renderCustomers();
       case 'projects': return renderProjects();
       case 'cash': return renderCash();
+      case 'users': return renderUsers();
     }
   } catch (e) {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
@@ -243,41 +289,107 @@ async function showKardex(articleId, name) {
 // ARTÍCULOS
 // ---------------------------------------------------------
 async function renderArticles() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
+  document.getElementById('viewActions').innerHTML = `
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin-right:8px">
+      <input type="checkbox" id="ivaToggle" onchange="renderArticles()"> Mostrar con IVA
+    </label>
+    <button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
   const el = document.getElementById('view');
   const rows = artByBU();
+  const withIva = document.getElementById('ivaToggle')?.checked;
   el.innerHTML = `
     <div class="card">
-      ${tableOrEmpty(rows, ['Código', 'Descripción', 'Costo lista', 'Envío %', 'TC %', 'Ganancia %', 'Precio final'], (a) => `
+      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Moneda', 'Costo lista', `Precio ${withIva ? 'c/IVA' : 's/IVA'}`, ''], (a) => `
         <tr>
           <td class="mono">${a.code}</td>
+          <td class="mono">${a.alt_code || '-'}</td>
           <td>${a.description}</td>
-          <td class="num">$ ${fmtMoney(a.list_cost)}</td>
-          <td class="num">${a.shipping_margin_pct}%</td>
-          <td class="num">${a.fx_margin_pct}%</td>
-          <td class="num">${a.profit_margin_pct}%</td>
-          <td class="num income">$ ${fmtMoney(a.final_price)}</td>
+          <td class="mono">${a.currency}</td>
+          <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
+          <td class="num income">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(withIva ? a.final_price_with_iva : a.final_price)}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button></td>
         </tr>`, 'No hay artículos cargados en esta unidad.')}
     </div>
   `;
 }
 
+async function deleteArticle(id, code) {
+  if (!confirm(`¿Eliminar el artículo ${code}? Esta acción no se puede deshacer.`)) return;
+  try {
+    await api(`/articles/${id}`, { method: 'DELETE' });
+    toast('Artículo eliminado.');
+    await loadMasterData(); renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function newArticleModal() {
   openModal(`
     <h2>Nuevo artículo</h2>
-    <div class="field"><label>Código</label><input id="f_code" placeholder="ART001"></div>
-    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto"></div>
-    <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01"></div>
     <div class="field-row">
-      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" value="0"></div>
-      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" value="0"></div>
+      <div class="field"><label>Código</label><input id="f_code" placeholder="ART001"></div>
+      <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional"></div>
     </div>
-    <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" value="0"></div>
+    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto"></div>
+    <div class="field-row">
+      <div class="field"><label>Moneda</label>
+        <select id="f_currency" oninput="updatePricePreview()">
+          <option value="ARS">Pesos argentinos (ARS)</option>
+          <option value="USD">Dólares (USD)</option>
+        </select>
+      </div>
+      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" value="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" value="21" oninput="updatePricePreview()"></div>
+    </div>
+
+    <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
+      <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
+      <table class="ledger">
+        <tbody>
+          <tr><td>Costo de lista</td><td class="num" id="pv_cost">$ 0,00</td></tr>
+          <tr><td>+ Envío</td><td class="num" id="pv_ship">$ 0,00</td></tr>
+          <tr><td>+ Tipo de cambio</td><td class="num" id="pv_fx">$ 0,00</td></tr>
+          <tr><td>+ Ganancia</td><td class="num" id="pv_profit">$ 0,00</td></tr>
+          <tr><td><strong>Precio sin IVA</strong></td><td class="num income" id="pv_final"><strong>$ 0,00</strong></td></tr>
+          <tr><td><strong>Precio con IVA</strong></td><td class="num income" id="pv_final_iva"><strong>$ 0,00</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="createArticle()">Guardar</button>
     </div>
   `);
+  updatePricePreview();
+}
+
+function updatePricePreview() {
+  const cost = Number(document.getElementById('f_cost').value) || 0;
+  const ship = Number(document.getElementById('f_ship').value) || 0;
+  const fx = Number(document.getElementById('f_fx').value) || 0;
+  const profit = Number(document.getElementById('f_profit').value) || 0;
+  const iva = Number(document.getElementById('f_iva').value) || 0;
+  const currency = document.getElementById('f_currency').value;
+  const sym = currency === 'USD' ? 'US$' : '$';
+
+  const afterShip = cost * (1 + ship / 100);
+  const afterFx = afterShip * (1 + fx / 100);
+  const final = afterFx * (1 + profit / 100);
+  const finalIva = final * (1 + iva / 100);
+
+  document.getElementById('pv_cost').textContent = `${sym} ${fmtMoney(cost)}`;
+  document.getElementById('pv_ship').textContent = `${sym} ${fmtMoney(afterShip - cost)}`;
+  document.getElementById('pv_fx').textContent = `${sym} ${fmtMoney(afterFx - afterShip)}`;
+  document.getElementById('pv_profit').textContent = `${sym} ${fmtMoney(final - afterFx)}`;
+  document.getElementById('pv_final').innerHTML = `<strong>${sym} ${fmtMoney(final)}</strong>`;
+  document.getElementById('pv_final_iva').innerHTML = `<strong>${sym} ${fmtMoney(finalIva)}</strong>`;
 }
 async function createArticle() {
   try {
@@ -286,11 +398,14 @@ async function createArticle() {
       body: JSON.stringify({
         business_unit_id: state.selectedBU,
         code: document.getElementById('f_code').value,
+        alt_code: document.getElementById('f_altcode').value,
         description: document.getElementById('f_desc').value,
         list_cost: Number(document.getElementById('f_cost').value),
+        currency: document.getElementById('f_currency').value,
         shipping_margin_pct: Number(document.getElementById('f_ship').value),
         fx_margin_pct: Number(document.getElementById('f_fx').value),
         profit_margin_pct: Number(document.getElementById('f_profit').value),
+        iva_pct: Number(document.getElementById('f_iva').value),
       }),
     });
     closeModal(); toast('Artículo creado.'); await loadMasterData(); renderView();
@@ -436,17 +551,99 @@ async function renderPurchases() {
 async function renderSales() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newOperationModal('sale')">+ Nueva venta</button>`;
   const el = document.getElementById('view');
-  const all = await api('/sales');
+  const [all, pending] = await Promise.all([api('/sales'), api('/sales/pending-collection')]);
   const rows = all.filter(s => s.business_unit_id === state.selectedBU);
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
-    <tr>
-      <td class="mono">#${s.id}</td>
-      <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
-      <td>${statusBadge(s.status)}</td>
-      <td>${s.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
-      <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
-      <td>${opActions('sales', s)}</td>
-    </tr>`, 'No hay ventas registradas en esta unidad.')}</div>`;
+  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU);
+
+  el.innerHTML = `
+    ${pendingBU.length ? `
+    <div class="card">
+      <div class="card-title">Facturas pendientes de procesar (cobradas fuera del sistema)</div>
+      ${tableOrEmpty(pendingBU, ['#', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+        <tr>
+          <td class="mono">#${s.id}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td class="num">$ ${fmtMoney(s.total_amount)}</td>
+          <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
+          <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
+          <td>${collectionBadge(s.collection_status)}</td>
+          <td><button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button></td>
+        </tr>`, '')}
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-title">Todas las ventas</div>
+      ${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
+        <tr>
+          <td class="mono">#${s.id}</td>
+          <td class="mono">${new Date(s.date).toLocaleString('es-AR')}</td>
+          <td>${statusBadge(s.status)}</td>
+          <td>${paymentTypeLabel(s.payment_type)}</td>
+          <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
+          <td>${opActions('sales', s)}</td>
+        </tr>`, 'No hay ventas registradas en esta unidad.')}
+    </div>
+  `;
+}
+
+function paymentTypeLabel(t) {
+  return { CASH: 'Contado', ACCOUNT: 'Cta. Cte.', UNCOLLECTED: 'Sin cobrar' }[t] || t;
+}
+function collectionBadge(status) {
+  const map = { PENDIENTE: 'pending', PARCIAL: 'pending', COBRADO: 'confirmed' };
+  return `<span class="badge badge-${map[status] || 'pending'}">${status}</span>`;
+}
+
+function openCollectModal(saleId, remaining) {
+  const boxOptions = state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('');
+  const projOptions = `<option value="">Sin proyecto</option>` + projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  openModal(`
+    <h2>Procesar cobro — Venta #${saleId}</h2>
+    <div class="hint" style="margin-bottom:14px">Saldo pendiente: <strong>$ ${fmtMoney(remaining)}</strong>. Repartí el monto cobrado entre una o más cajas.</div>
+    <div class="line-items" id="collectSplits"></div>
+    <button class="btn btn-sm" onclick="addCollectSplit()">+ Agregar caja</button>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitCollect(${saleId})">Confirmar cobro</button>
+    </div>
+  `);
+  window._collectBoxOptions = boxOptions;
+  window._collectProjOptions = projOptions;
+  addCollectSplit();
+}
+let collectSplitCount = 0;
+function addCollectSplit() {
+  const id = collectSplitCount++;
+  const container = document.getElementById('collectSplits');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `csplit_${id}`;
+  row.innerHTML = `
+    <select id="cbox_${id}">${window._collectBoxOptions}</select>
+    <input type="number" step="0.01" placeholder="Monto" id="camount_${id}">
+    <select id="cproj_${id}">${window._collectProjOptions}</select>
+    <button class="remove-line" onclick="document.getElementById('csplit_${id}').remove()">×</button>
+  `;
+  container.appendChild(row);
+}
+async function submitCollect(saleId) {
+  const rows = [...document.getElementById('collectSplits').children];
+  const splits = rows.map(row => {
+    const idx = row.id.replace('csplit_', '');
+    return {
+      cash_box_id: Number(document.getElementById(`cbox_${idx}`).value),
+      amount: Number(document.getElementById(`camount_${idx}`).value),
+      project_id: document.getElementById(`cproj_${idx}`).value ? Number(document.getElementById(`cproj_${idx}`).value) : null,
+    };
+  }).filter(s => s.amount > 0);
+
+  if (!splits.length) { toast('Agregá al menos un monto.', 'error'); return; }
+  try {
+    await api(`/sales/${saleId}/collect`, { method: 'POST', body: JSON.stringify({ splits }) });
+    closeModal();
+    toast('Cobro registrado y distribuido entre las cajas.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function opActions(kind, op) {
@@ -494,6 +691,7 @@ function newOperationModal(kind) {
       <select id="f_payment">
         <option value="CASH">Contado (caja)</option>
         <option value="ACCOUNT">Cuenta corriente</option>
+        ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
       </select>
     </div>
 
@@ -570,11 +768,38 @@ async function createOperation(kind) {
 async function renderCash() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="openCashSessionModal()">+ Abrir caja</button>`;
   const el = document.getElementById('view');
+  const dashboard = await api('/cash-boxes/dashboard');
+
   el.innerHTML = `
     <div class="card">
-      <div class="card-title">Cajas disponibles</div>
-      ${tableOrEmpty(state.cache.cashBoxes, ['Nombre', 'Moneda'], (b) => `<tr><td>${b.name}</td><td class="mono">${b.currency}</td></tr>`, 'No hay cajas configuradas.')}
+      <div class="card-title">Dashboard de cajas</div>
+      <div class="cashbox-grid">
+        ${dashboard.map(b => `
+          <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}" onclick="selectCashBoxFilter(${b.cash_box_id})">
+            <div class="cashbox-tile-name">${b.name}</div>
+            <div class="cashbox-tile-balance">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
+            <div class="cashbox-tile-meta">
+              <span class="income">+${fmtMoney(b.total_income)}</span>
+              <span class="expense">−${fmtMoney(b.total_expense)}</span>
+            </div>
+            <div class="cashbox-tile-currency">${b.currency}</div>
+          </div>
+        `).join('')}
+      </div>
     </div>
+
+    <div class="card">
+      <div class="card-title">Movimientos por caja</div>
+      <div class="field" style="max-width:280px">
+        <label>Filtrar por caja</label>
+        <select id="cashFilterSelect" onchange="loadCashBoxMovements()">
+          <option value="">— Seleccioná una caja —</option>
+          ${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}
+        </select>
+      </div>
+      <div id="cashMovementsResult"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">Registrar movimiento manual</div>
       <div class="field-row">
@@ -587,7 +812,7 @@ async function renderCash() {
       </div>
       <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
       <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
-      <div class="hint">Necesitás el ID de una sesión de caja abierta. Consultalo con "Ver resumen" abajo.</div>
+      <div class="hint">Necesitás el ID de una sesión de caja abierta.</div>
     </div>
     <div class="card">
       <div class="card-title">Consultar resumen / cerrar sesión</div>
@@ -598,6 +823,28 @@ async function renderCash() {
       <div id="cashSummaryResult"></div>
     </div>
   `;
+}
+
+function selectCashBoxFilter(id) {
+  document.getElementById('cashFilterSelect').value = id;
+  loadCashBoxMovements();
+  document.getElementById('cashFilterSelect').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function loadCashBoxMovements() {
+  const id = document.getElementById('cashFilterSelect').value;
+  const resultEl = document.getElementById('cashMovementsResult');
+  if (!id) { resultEl.innerHTML = ''; return; }
+  const rows = await api(`/cash-boxes/${id}/movements`);
+  resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
+    <tr>
+      <td class="mono">${new Date(m.created_at).toLocaleString('es-AR')}</td>
+      <td>${m.business_unit_name}</td>
+      <td>${m.type === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
+      <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
+      <td>${m.description || '-'}</td>
+      <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
+    </tr>`, 'Esta caja no tiene movimientos registrados.');
 }
 function openCashSessionModal() {
   const boxOptions = state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
@@ -675,12 +922,86 @@ async function closeCashSession(id) {
 }
 
 // ---------------------------------------------------------
+// USUARIOS (solo admin)
+// ---------------------------------------------------------
+async function renderUsers() {
+  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newUserModal()">+ Nuevo usuario</button>`;
+  const el = document.getElementById('view');
+  const rows = await api('/users');
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Usuario', 'Rol', 'Estado', ''], (u) => `
+    <tr>
+      <td>${u.username}</td>
+      <td class="mono">${u.role}</td>
+      <td>${u.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
+      <td>
+        <button class="btn btn-sm" onclick="toggleUser(${u.id})">${u.active ? 'Desactivar' : 'Activar'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.username}')">Eliminar</button>
+      </td>
+    </tr>`, 'No hay usuarios cargados.')}</div>`;
+}
+function newUserModal() {
+  openModal(`
+    <h2>Nuevo usuario</h2>
+    <div class="field"><label>Nombre de usuario</label><input id="f_username"></div>
+    <div class="field"><label>Contraseña</label><input id="f_password" type="password"></div>
+    <div class="field"><label>Rol</label>
+      <select id="f_role">
+        <option value="USER">Usuario</option>
+        <option value="ADMIN">Administrador</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="createUser()">Guardar</button>
+    </div>
+  `);
+}
+async function createUser() {
+  try {
+    await api('/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: document.getElementById('f_username').value,
+        password: document.getElementById('f_password').value,
+        role: document.getElementById('f_role').value,
+      }),
+    });
+    closeModal(); toast('Usuario creado.'); renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function toggleUser(id) {
+  try { await api(`/users/${id}/toggle`, { method: 'PUT' }); renderView(); } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteUser(id, username) {
+  if (!confirm(`¿Eliminar el usuario ${username}?`)) return;
+  try { await api(`/users/${id}`, { method: 'DELETE' }); toast('Usuario eliminado.'); renderView(); } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---------------------------------------------------------
 // INIT
 // ---------------------------------------------------------
-(async function init() {
+async function boot() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appShell').style.display = 'flex';
+  document.getElementById('currentUserLabel').textContent = `${state.currentUser.username} (${state.currentUser.role === 'ADMIN' ? 'Admin' : 'Usuario'})`;
+  document.getElementById('adminNavGroup').style.display = state.currentUser.role === 'ADMIN' ? 'flex' : 'none';
   await checkConnection();
   await loadBusinessUnits();
   await loadMasterData();
   renderView();
-  setInterval(checkConnection, 15000);
+}
+
+document.getElementById('loginPass')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('loginUser')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+(function init() {
+  const token = getToken();
+  if (!token) return; // se queda en la pantalla de login
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    state.currentUser = { id: payload.id, username: payload.username, role: payload.role };
+    boot();
+  } catch (e) {
+    clearToken();
+  }
 })();

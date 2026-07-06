@@ -3,18 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ERP Multi-Unidad</title>
+<title>You One Racing — ERP</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<div class="shell">
+<div class="login-screen" id="loginScreen">
+  <div class="login-box">
+    <img src="assets/logo.jpg" alt="You One Racing" class="login-logo">
+    <h1>YOU ONE RACING<span>S.A.S.</span></h1>
+    <div class="field"><label>Usuario</label><input id="loginUser" autocomplete="username"></div>
+    <div class="field"><label>Contraseña</label><input id="loginPass" type="password" autocomplete="current-password"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Ingresar</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<div class="shell" id="appShell" style="display:none">
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark">◧</span>
-      <span class="brand-name">ERP<span class="brand-dim">·multi</span></span>
+      <img src="assets/logo.jpg" alt="You One Racing" class="brand-logo">
+      <span class="brand-name">YOU ONE RACING<span class="brand-dim">S.A.S.</span></span>
     </div>
 
     <div class="bu-picker">
@@ -45,8 +56,16 @@
         <span class="nav-label">Finanzas</span>
         <button class="nav-item" data-view="cash">Caja</button>
       </div>
+      <div class="nav-group" id="adminNavGroup" style="display:none">
+        <span class="nav-label">Administración</span>
+        <button class="nav-item" data-view="users">Usuarios</button>
+      </div>
     </nav>
 
+    <div class="user-box">
+      <span id="currentUserLabel"></span>
+      <button class="btn btn-sm" onclick="doLogout()">Salir</button>
+    </div>
     <div class="conn-status" id="connStatus">
       <span class="dot"></span>
       <span class="conn-text">Conectando…</span>

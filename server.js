@@ -1,13 +1,82 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 const pool = require('./db');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'cambiar-este-secreto-en-produccion';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- AUTH MIDDLEWARE ----------
+function authRequired(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: 'No autenticado' });
+  const token = header.replace('Bearer ', '');
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Sesión inválida o expirada' });
+  }
+}
+function adminRequired(req, res, next) {
+  if (req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Requiere permisos de administrador' });
+  next();
+}
+
+// ---------- AUTH ROUTES (públicas) ----------
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const r = await pool.query('SELECT * FROM app_user WHERE username=$1 AND active=true', [username]);
+    const user = r.rows[0];
+    if (!user) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// A partir de acá, todo requiere estar logueado
+app.use(authRequired);
+
+// ---------- USERS (solo admin) ----------
+app.get('/users', adminRequired, async (req, res) => {
+  const r = await pool.query('SELECT id, username, role, active, created_at FROM app_user ORDER BY id');
+  res.json(r.rows);
+});
+app.post('/users', adminRequired, async (req, res) => {
+  try {
+    const { username, password, role } = req.body;
+    const hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      'INSERT INTO app_user (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id, username, role, active, created_at',
+      [username, hash, role || 'USER']
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.code === '23505' ? 'Ese nombre de usuario ya existe' : e.message });
+  }
+});
+app.put('/users/:id/toggle', adminRequired, async (req, res) => {
+  const { id } = req.params;
+  const r = await pool.query('UPDATE app_user SET active = NOT active WHERE id=$1 RETURNING id, username, role, active', [id]);
+  res.json(r.rows[0]);
+});
+app.delete('/users/:id', adminRequired, async (req, res) => {
+  if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'No podés eliminar tu propio usuario' });
+  await pool.query('DELETE FROM app_user WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+});
 
 // ---------- BUSINESS UNITS ----------
 app.get('/business-units', async (req, res) => {
@@ -72,11 +141,11 @@ app.get('/warehouses', async (req, res) => {
 
 // ---------- ARTICLES ----------
 app.post('/articles', async (req, res) => {
-  const { business_unit_id, code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct } = req.body;
+  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency } = req.body;
   const r = await pool.query(
-    `INSERT INTO article (business_unit_id, code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [business_unit_id, code, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0]
+    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS']
   );
   res.json(r.rows[0]);
 });
@@ -85,9 +154,51 @@ app.get('/articles', async (req, res) => {
   res.json(r.rows);
 });
 
+app.delete('/articles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM article WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- CASH BOX / SESSIONS ----------
 app.get('/cash-boxes', async (req, res) => {
   const r = await pool.query('SELECT * FROM cash_box ORDER BY id');
+  res.json(r.rows);
+});
+
+app.get('/cash-boxes/dashboard', async (req, res) => {
+  const r = await pool.query(`
+    SELECT
+      cb.id AS cash_box_id, cb.name, cb.currency,
+      COUNT(DISTINCT cs.id) FILTER (WHERE cs.status = 'OPEN') AS open_sessions,
+      COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'INCOME'), 0) AS total_income,
+      COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'EXPENSE'), 0) AS total_expense,
+      COALESCE(SUM(cs.opening_amount) FILTER (WHERE cs.status = 'OPEN'), 0)
+        + COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'INCOME' AND cs.status = 'OPEN'), 0)
+        - COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'EXPENSE' AND cs.status = 'OPEN'), 0) AS current_balance
+    FROM cash_box cb
+    LEFT JOIN cash_session cs ON cs.cash_box_id = cb.id
+    LEFT JOIN cash_movement cm ON cm.cash_session_id = cs.id
+    GROUP BY cb.id, cb.name, cb.currency
+    ORDER BY cb.id
+  `);
+  res.json(r.rows);
+});
+
+app.get('/cash-boxes/:id/movements', async (req, res) => {
+  const { id } = req.params;
+  const r = await pool.query(`
+    SELECT cm.*, cs.business_unit_id, bu.name AS business_unit_name, cs.status AS session_status
+    FROM cash_movement cm
+    JOIN cash_session cs ON cs.id = cm.cash_session_id
+    JOIN business_unit bu ON bu.id = cs.business_unit_id
+    WHERE cs.cash_box_id = $1
+    ORDER BY cm.created_at DESC
+  `, [id]);
   res.json(r.rows);
 });
 
@@ -241,6 +352,63 @@ app.post('/sales/:id/cancel', async (req, res) => {
 app.get('/sales', async (req, res) => {
   const r = await pool.query('SELECT * FROM sale ORDER BY id DESC');
   res.json(r.rows);
+});
+
+app.get('/sales/pending-collection', async (req, res) => {
+  const r = await pool.query('SELECT * FROM sale_pending_collection ORDER BY date DESC');
+  res.json(r.rows);
+});
+
+app.post('/sales/:id/collect', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { splits } = req.body; // [{ cash_box_id, amount, project_id }]
+    if (!splits || !splits.length) throw new Error('Agregá al menos una caja con un monto.');
+
+    await client.query('BEGIN');
+
+    const saleR = await client.query('SELECT * FROM sale WHERE id=$1 FOR UPDATE', [id]);
+    const sale = saleR.rows[0];
+    if (!sale) throw new Error('Venta no encontrada.');
+    if (sale.payment_type !== 'UNCOLLECTED') throw new Error('Esta venta no está marcada como pendiente de cobro.');
+
+    const remaining = Number(sale.total_amount) - Number(sale.settled_amount);
+    const splitTotal = splits.reduce((a, s) => a + Number(s.amount), 0);
+    if (splitTotal <= 0) throw new Error('El monto a cobrar debe ser mayor a cero.');
+    if (splitTotal > remaining + 0.01) throw new Error(`El total a cobrar ($${splitTotal}) supera el saldo pendiente ($${remaining}).`);
+
+    for (const split of splits) {
+      const sessionR = await client.query(
+        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND business_unit_id=$2 AND status='OPEN' ORDER BY opened_at DESC LIMIT 1`,
+        [split.cash_box_id, sale.business_unit_id]
+      );
+      const session = sessionR.rows[0];
+      if (!session) throw new Error(`No hay una caja abierta para la caja seleccionada en esta unidad de negocio. Abrí una sesión primero.`);
+
+      await client.query(
+        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [sale.id, split.cash_box_id, session.id, sale.business_unit_id, split.project_id || null, split.amount]
+      );
+      await client.query(
+        `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+         VALUES ($1,$2,$3,'INCOME',$4,$5,'SALE',$6)`,
+        [session.id, sale.business_unit_id, split.project_id || null, split.amount, `Cobro Venta #${sale.id}`, sale.id]
+      );
+    }
+
+    await client.query('UPDATE sale SET settled_amount = settled_amount + $1 WHERE id=$2', [splitTotal, sale.id]);
+
+    await client.query('COMMIT');
+    const updated = await pool.query('SELECT * FROM sale_pending_collection WHERE id=$1', [id]);
+    res.json(updated.rows[0] || { ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 // ---------- STOCK ----------
