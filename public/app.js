@@ -11,6 +11,18 @@ const state = {
 
 const fmtMoney = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtQty = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+function fmtDate(value) {
+  if (!value) return '-';
+  let str = value instanceof Date ? value.toISOString() : String(value);
+  if (!/Z$|[+-]\d\d:?\d\d$/.test(str)) str += 'Z'; // forzar UTC si no trae zona horaria
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
 
 // ---------------------------------------------------------
 // Auth
@@ -146,7 +158,9 @@ async function createBusinessUnit() {
 async function deleteCurrentBusinessUnit() {
   const bu = state.businessUnits.find(b => b.id === state.selectedBU);
   if (!bu) return;
-  if (!confirm(`¿Eliminar la unidad de negocio "${bu.name}"? Esta acción no se puede deshacer.`)) return;
+  if (!confirm(`¿Eliminar la unidad de negocio "${bu.name}"? Se perderán sus proyectos, artículos y depósitos asociados.`)) return;
+  const typed = prompt(`Para confirmar, escribí exactamente el nombre de la unidad: "${bu.name}"`);
+  if (typed !== bu.name) { toast('El nombre no coincide. No se eliminó nada.', 'error'); return; }
   try {
     await api(`/business-units/${bu.id}`, { method: 'DELETE' });
     toast('Unidad de negocio eliminada.');
@@ -257,7 +271,7 @@ async function renderDashboard() {
         (o) => `
         <tr>
           <td>${o.kind}</td>
-          <td class="mono">${new Date(o.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+          <td class="mono">${fmtDate(o.date)}</td>
           <td>${statusBadge(o.status)}</td>
           <td class="num">$ ${fmtMoney(o.total_amount)}</td>
         </tr>`, 'Sin operaciones registradas.')}
@@ -310,7 +324,7 @@ async function showKardex(articleId, name) {
     <h2>Kardex — ${name}</h2>
     ${tableOrEmpty(rows, ['Fecha', 'Depósito', 'Tipo', 'Cantidad', 'Origen'], (m) => `
       <tr>
-        <td class="mono">${new Date(m.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+        <td class="mono">${fmtDate(m.created_at)}</td>
         <td>${m.warehouse_name}</td>
         <td>${m.type === 'IN' ? 'Entrada' : 'Salida'}</td>
         <td class="num ${m.type === 'IN' ? 'income' : 'expense'}">${fmtQty(m.quantity)}</td>
@@ -587,7 +601,7 @@ async function renderPurchases() {
   el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
     <tr>
       <td class="mono">#${p.id}</td>
-      <td class="mono">${new Date(p.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+      <td class="mono">${fmtDate(p.date)}</td>
       <td>${statusBadge(p.status)}</td>
       <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
       <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
@@ -603,7 +617,7 @@ async function renderSales() {
   const el = document.getElementById('view');
   const [all, pending] = await Promise.all([api('/sales'), api('/sales/pending-collection')]);
   const rows = all.filter(s => s.business_unit_id === state.selectedBU);
-  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU);
+  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
 
   el.innerHTML = `
     ${pendingBU.length ? `
@@ -614,7 +628,7 @@ async function renderSales() {
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
           <td class="mono">${customerTaxId(s.customer_id)}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+          <td class="mono">${fmtDate(s.date)}</td>
           <td class="num">$ ${fmtMoney(s.total_amount)}</td>
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
@@ -630,7 +644,7 @@ async function renderSales() {
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
           <td class="mono">${customerTaxId(s.customer_id)}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+          <td class="mono">${fmtDate(s.date)}</td>
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
           <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
@@ -742,7 +756,7 @@ async function renderDebtors() {
   document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
   const [pending, all] = await Promise.all([api('/sales/pending-collection'), api('/sales')]);
-  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU);
+  const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
 
   const byCustomer = {};
   pendingBU.forEach(s => {
@@ -780,7 +794,7 @@ async function renderDebtors() {
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
           <td class="mono">${customerTaxId(s.customer_id)}</td>
-          <td class="mono">${new Date(s.date).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+          <td class="mono">${fmtDate(s.date)}</td>
           <td class="num">$ ${fmtMoney(s.total_amount)}</td>
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
@@ -1011,7 +1025,7 @@ async function loadCashBoxMovements() {
   const rows = await api(`/cash-boxes/${id}/movements`);
   resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
     <tr>
-      <td class="mono">${new Date(m.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</td>
+      <td class="mono">${fmtDate(m.created_at)}</td>
       <td>${m.business_unit_name || '-'}</td>
       <td>${m.type === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
       <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>

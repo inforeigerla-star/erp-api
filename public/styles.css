@@ -202,8 +202,13 @@ button, input, select { font-family: inherit; font-size: inherit; }
 .btn:hover { border-color: #C7C7CC; background: var(--accent-soft); }
 .btn-primary { background: var(--sidebar); border-color: var(--sidebar); color: #fff; }
 .btn-primary:hover { background: #000; border-color: #000; }
-.btn-danger { color: var(--danger); }
-.btn-danger:hover { border-color: var(--danger); background: var(--danger-soft); }
+.btn-danger {
+  color: var(--muted);
+  border-color: var(--border);
+  background: transparent;
+  opacity: 0.7;
+}
+.btn-danger:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); opacity: 1; }
 .btn-sm { padding: 6px 11px; font-size: 12.5px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -357,7 +362,7 @@ table.ledger tr:hover td { background: #FAFAFA; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 
-.line-items { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin-bottom: 10px; }
+.line-items { border: 1px solid var(--border); border-radius: 9px; margin-bottom: 10px; }
 .line-item-row {
   display: grid;
   grid-template-columns: 2fr 90px 120px 32px;

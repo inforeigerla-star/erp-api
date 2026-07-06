@@ -83,6 +83,23 @@ app.get('/business-units', async (req, res) => {
   const r = await pool.query('SELECT * FROM business_unit ORDER BY id');
   res.json(r.rows);
 });
+app.post('/business-units', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const r = await pool.query('INSERT INTO business_unit (name) VALUES ($1) RETURNING *', [name]);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.code === '23505' ? 'Ya existe una unidad de negocio con ese nombre' : e.message });
+  }
+});
+app.delete('/business-units/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM business_unit WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ---------- PROJECTS ----------
 app.post('/projects', async (req, res) => {
@@ -96,6 +113,14 @@ app.post('/projects', async (req, res) => {
 app.get('/projects', async (req, res) => {
   const r = await pool.query('SELECT * FROM project ORDER BY id');
   res.json(r.rows);
+});
+app.delete('/projects/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM project WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // ---------- SUPPLIERS / CUSTOMERS ----------
@@ -111,6 +136,14 @@ app.get('/suppliers', async (req, res) => {
   const r = await pool.query('SELECT * FROM supplier ORDER BY id');
   res.json(r.rows);
 });
+app.delete('/suppliers/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM supplier WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 app.post('/customers', async (req, res) => {
   const { name, tax_id, phone, email, address } = req.body;
@@ -123,6 +156,14 @@ app.post('/customers', async (req, res) => {
 app.get('/customers', async (req, res) => {
   const r = await pool.query('SELECT * FROM customer ORDER BY id');
   res.json(r.rows);
+});
+app.delete('/customers/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM customer WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // ---------- WAREHOUSES ----------
@@ -137,6 +178,14 @@ app.post('/warehouses', async (req, res) => {
 app.get('/warehouses', async (req, res) => {
   const r = await pool.query('SELECT * FROM warehouse ORDER BY id');
   res.json(r.rows);
+});
+app.delete('/warehouses/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM warehouse WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // ---------- ARTICLES ----------
@@ -173,18 +222,18 @@ app.get('/cash-boxes', async (req, res) => {
 app.get('/cash-boxes/dashboard', async (req, res) => {
   const r = await pool.query(`
     SELECT
-      cb.id AS cash_box_id, cb.name, cb.currency,
-      COUNT(DISTINCT cs.id) FILTER (WHERE cs.status = 'OPEN') AS open_sessions,
+      cb.id AS cash_box_id, cb.name, cb.currency, cb.kind,
+      cs.id AS cash_session_id, cs.status AS session_status,
       COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'INCOME'), 0) AS total_income,
       COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'EXPENSE'), 0) AS total_expense,
-      COALESCE(SUM(cs.opening_amount) FILTER (WHERE cs.status = 'OPEN'), 0)
-        + COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'INCOME' AND cs.status = 'OPEN'), 0)
-        - COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'EXPENSE' AND cs.status = 'OPEN'), 0) AS current_balance
+      cs.opening_amount
+        + COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'INCOME'), 0)
+        - COALESCE(SUM(cm.amount) FILTER (WHERE cm.type = 'EXPENSE'), 0) AS current_balance
     FROM cash_box cb
     LEFT JOIN cash_session cs ON cs.cash_box_id = cb.id
     LEFT JOIN cash_movement cm ON cm.cash_session_id = cs.id
-    GROUP BY cb.id, cb.name, cb.currency
-    ORDER BY cb.id
+    GROUP BY cb.id, cb.name, cb.currency, cb.kind, cs.id, cs.status, cs.opening_amount
+    ORDER BY cb.kind, cb.id
   `);
   res.json(r.rows);
 });
@@ -192,24 +241,14 @@ app.get('/cash-boxes/dashboard', async (req, res) => {
 app.get('/cash-boxes/:id/movements', async (req, res) => {
   const { id } = req.params;
   const r = await pool.query(`
-    SELECT cm.*, cs.business_unit_id, bu.name AS business_unit_name, cs.status AS session_status
+    SELECT cm.*, bu.name AS business_unit_name
     FROM cash_movement cm
     JOIN cash_session cs ON cs.id = cm.cash_session_id
-    JOIN business_unit bu ON bu.id = cs.business_unit_id
+    LEFT JOIN business_unit bu ON bu.id = cm.business_unit_id
     WHERE cs.cash_box_id = $1
     ORDER BY cm.created_at DESC
   `, [id]);
   res.json(r.rows);
-});
-
-app.post('/cash-sessions/open', async (req, res) => {
-  const { cash_box_id, business_unit_id, opening_amount } = req.body;
-  const r = await pool.query(
-    `INSERT INTO cash_session (cash_box_id, business_unit_id, opening_amount)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [cash_box_id, business_unit_id, opening_amount]
-  );
-  res.json(r.rows[0]);
 });
 
 app.post('/cash-sessions/:id/close', async (req, res) => {
@@ -220,6 +259,12 @@ app.post('/cash-sessions/:id/close', async (req, res) => {
   res.json(r.rows[0]);
 });
 
+app.post('/cash-sessions/:id/reopen', async (req, res) => {
+  const { id } = req.params;
+  const r = await pool.query(`UPDATE cash_session SET status='OPEN', closed_at=NULL WHERE id=$1 RETURNING *`, [id]);
+  res.json(r.rows[0]);
+});
+
 app.get('/cash-sessions/:id/summary', async (req, res) => {
   const { id } = req.params;
   const r = await pool.query('SELECT * FROM daily_cash_summary WHERE session_id = $1', [id]);
@@ -227,11 +272,14 @@ app.get('/cash-sessions/:id/summary', async (req, res) => {
 });
 
 app.post('/cash-movements', async (req, res) => {
-  const { cash_session_id, business_unit_id, project_id, type, amount, description } = req.body;
+  const { cash_box_id, business_unit_id, project_id, type, amount, description } = req.body;
+  const sessionR = await pool.query(`SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`, [cash_box_id]);
+  const session = sessionR.rows[0];
+  if (!session) return res.status(400).json({ error: 'Esa caja no tiene una sesión abierta.' });
   const r = await pool.query(
     `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type)
      VALUES ($1,$2,$3,$4,$5,$6,'MANUAL') RETURNING *`,
-    [cash_session_id, business_unit_id, project_id || null, type, amount, description]
+    [session.id, business_unit_id, project_id || null, type, amount, description]
   );
   res.json(r.rows[0]);
 });
@@ -240,13 +288,13 @@ app.post('/cash-movements', async (req, res) => {
 app.post('/purchases', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, supplier_id, warehouse_id, project_id, payment_type, items } = req.body;
+    const { business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
     await client.query('BEGIN');
 
     const purchaseR = await client.query(
-      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, payment_type)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [business_unit_id, supplier_id, warehouse_id, project_id || null, payment_type]
+      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [business_unit_id, supplier_id, warehouse_id, project_id || null, cash_box_id || null, payment_type]
     );
     const purchase = purchaseR.rows[0];
 
@@ -295,17 +343,31 @@ app.get('/purchases', async (req, res) => {
   res.json(r.rows);
 });
 
+app.delete('/purchases/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM purchase_item WHERE purchase_id=$1', [id]);
+    await pool.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
+    await pool.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [id]);
+    await pool.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
+    await pool.query('DELETE FROM purchase WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- SALES ----------
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, payment_type, items } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
     await client.query('BEGIN');
 
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, payment_type)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, payment_type || 'CASH']
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH']
     );
     const sale = saleR.rows[0];
 
@@ -354,6 +416,21 @@ app.get('/sales', async (req, res) => {
   res.json(r.rows);
 });
 
+app.delete('/sales/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM sale_item WHERE sale_id=$1', [id]);
+    await pool.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', id]);
+    await pool.query('DELETE FROM customer_account_movement WHERE sale_id=$1', [id]);
+    await pool.query('DELETE FROM sale_collection WHERE sale_id=$1', [id]);
+    await pool.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', id]);
+    await pool.query('DELETE FROM sale WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get('/sales/pending-collection', async (req, res) => {
   const r = await pool.query('SELECT * FROM sale_pending_collection ORDER BY date DESC');
   res.json(r.rows);
@@ -380,11 +457,11 @@ app.post('/sales/:id/collect', async (req, res) => {
 
     for (const split of splits) {
       const sessionR = await client.query(
-        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND business_unit_id=$2 AND status='OPEN' ORDER BY opened_at DESC LIMIT 1`,
-        [split.cash_box_id, sale.business_unit_id]
+        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`,
+        [split.cash_box_id]
       );
       const session = sessionR.rows[0];
-      if (!session) throw new Error(`No hay una caja abierta para la caja seleccionada en esta unidad de negocio. Abrí una sesión primero.`);
+      if (!session) throw new Error(`La caja seleccionada no tiene una sesión abierta.`);
 
       await client.query(
         `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount)
