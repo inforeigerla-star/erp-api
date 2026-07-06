@@ -284,6 +284,15 @@ app.post('/cash-movements', async (req, res) => {
   res.json(r.rows[0]);
 });
 
+app.delete('/cash-movements/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM cash_movement WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- PURCHASES ----------
 app.post('/purchases', async (req, res) => {
   const client = await pool.connect();
@@ -504,6 +513,117 @@ app.get('/stock/kardex/:article_id', async (req, res) => {
   const { article_id } = req.params;
   const r = await pool.query('SELECT * FROM article_kardex WHERE article_id=$1', [article_id]);
   res.json(r.rows);
+});
+
+app.post('/stock/transfer', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { article_id, from_warehouse_id, to_warehouse_id, quantity } = req.body;
+    if (from_warehouse_id === to_warehouse_id) throw new Error('El depósito de origen y destino deben ser distintos.');
+    if (!(quantity > 0)) throw new Error('La cantidad debe ser mayor a cero.');
+
+    await client.query('BEGIN');
+    const stockR = await client.query(
+      'SELECT quantity FROM stock WHERE warehouse_id=$1 AND article_id=$2 FOR UPDATE',
+      [from_warehouse_id, article_id]
+    );
+    const available = Number(stockR.rows[0]?.quantity || 0);
+    if (available < quantity) throw new Error(`Stock insuficiente en el depósito de origen (disponible: ${available}).`);
+
+    await client.query(
+      'UPDATE stock SET quantity = quantity - $1 WHERE warehouse_id=$2 AND article_id=$3',
+      [quantity, from_warehouse_id, article_id]
+    );
+    await client.query(
+      `INSERT INTO stock (warehouse_id, article_id, quantity) VALUES ($1,$2,$3)
+       ON CONFLICT (warehouse_id, article_id) DO UPDATE SET quantity = stock.quantity + EXCLUDED.quantity`,
+      [to_warehouse_id, article_id, quantity]
+    );
+    await client.query(
+      `INSERT INTO stock_movement (warehouse_id, article_id, type, quantity, origin_type) VALUES ($1,$2,'OUT',$3,'ADJUSTMENT')`,
+      [from_warehouse_id, article_id, quantity]
+    );
+    await client.query(
+      `INSERT INTO stock_movement (warehouse_id, article_id, type, quantity, origin_type) VALUES ($1,$2,'IN',$3,'ADJUSTMENT')`,
+      [to_warehouse_id, article_id, quantity]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/stock/adjust', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { article_id, warehouse_id, quantity, type } = req.body; // type: 'IN' | 'OUT'
+    if (!(quantity > 0)) throw new Error('La cantidad debe ser mayor a cero.');
+
+    await client.query('BEGIN');
+    if (type === 'OUT') {
+      const stockR = await client.query(
+        'SELECT quantity FROM stock WHERE warehouse_id=$1 AND article_id=$2 FOR UPDATE',
+        [warehouse_id, article_id]
+      );
+      const available = Number(stockR.rows[0]?.quantity || 0);
+      if (available < quantity) throw new Error(`Stock insuficiente (disponible: ${available}).`);
+      await client.query('UPDATE stock SET quantity = quantity - $1 WHERE warehouse_id=$2 AND article_id=$3', [quantity, warehouse_id, article_id]);
+    } else {
+      await client.query(
+        `INSERT INTO stock (warehouse_id, article_id, quantity) VALUES ($1,$2,$3)
+         ON CONFLICT (warehouse_id, article_id) DO UPDATE SET quantity = stock.quantity + EXCLUDED.quantity`,
+        [warehouse_id, article_id, quantity]
+      );
+    }
+    await client.query(
+      `INSERT INTO stock_movement (warehouse_id, article_id, type, quantity, origin_type) VALUES ($1,$2,$3,$4,'ADJUSTMENT')`,
+      [warehouse_id, article_id, type, quantity]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/stock-movements/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const movR = await client.query('SELECT * FROM stock_movement WHERE id=$1', [id]);
+    const mov = movR.rows[0];
+    if (!mov) throw new Error('Movimiento no encontrado.');
+
+    await client.query('BEGIN');
+    const delta = mov.type === 'IN' ? -Number(mov.quantity) : Number(mov.quantity);
+    await client.query(
+      `INSERT INTO stock (warehouse_id, article_id, quantity) VALUES ($1,$2,0)
+       ON CONFLICT (warehouse_id, article_id) DO NOTHING`,
+      [mov.warehouse_id, mov.article_id]
+    );
+    await client.query(
+      `UPDATE stock SET quantity = quantity + $1 WHERE warehouse_id=$2 AND article_id=$3`,
+      [delta, mov.warehouse_id, mov.article_id]
+    );
+    await client.query('DELETE FROM stock_movement WHERE id=$1', [id]);
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    const msg = e.message.includes('chk_stock_non_negative')
+      ? 'No se puede eliminar: dejaría el stock del depósito en negativo (hay salidas posteriores que dependen de esta carga).'
+      : e.message;
+    res.status(400).json({ error: msg });
+  } finally {
+    client.release();
+  }
 });
 
 // ---------- PROJECT PROFITABILITY ----------

@@ -298,6 +298,9 @@ function tableOrEmpty(rows, headers, rowFn, emptyMsg) {
 // STOCK
 // ---------------------------------------------------------
 async function renderStock() {
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="openStockAdjustModal()">Ajustar stock</button>
+    <button class="btn btn-primary" onclick="openStockTransferModal()">Transferir entre depósitos</button>`;
   const el = document.getElementById('view');
   const stock = await api('/stock');
   const buWarehouseIds = whByBU().map(w => w.id);
@@ -318,20 +321,106 @@ async function renderStock() {
   `;
 }
 
+function articleSelectOptions() {
+  return artByBU().map(a => `<option value="${a.article_id}">${a.code} — ${a.description}</option>`).join('');
+}
+function warehouseSelectOptions() {
+  return whByBU().map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+}
+
+function openStockTransferModal() {
+  openModal(`
+    <h2>Transferir stock entre depósitos</h2>
+    <div class="field"><label>Artículo</label><select id="f_transfer_article">${articleSelectOptions()}</select></div>
+    <div class="field-row">
+      <div class="field"><label>Depósito origen</label><select id="f_transfer_from">${warehouseSelectOptions()}</select></div>
+      <div class="field"><label>Depósito destino</label><select id="f_transfer_to">${warehouseSelectOptions()}</select></div>
+    </div>
+    <div class="field"><label>Cantidad</label><input id="f_transfer_qty" type="number" step="0.001" placeholder="0"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitStockTransfer()">Transferir</button>
+    </div>
+  `);
+}
+async function submitStockTransfer() {
+  try {
+    await api('/stock/transfer', {
+      method: 'POST',
+      body: JSON.stringify({
+        article_id: Number(document.getElementById('f_transfer_article').value),
+        from_warehouse_id: Number(document.getElementById('f_transfer_from').value),
+        to_warehouse_id: Number(document.getElementById('f_transfer_to').value),
+        quantity: Number(document.getElementById('f_transfer_qty').value),
+      }),
+    });
+    closeModal();
+    toast('Stock transferido correctamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function openStockAdjustModal() {
+  openModal(`
+    <h2>Ajustar stock</h2>
+    <div class="field"><label>Artículo</label><select id="f_adjust_article">${articleSelectOptions()}</select></div>
+    <div class="field-row">
+      <div class="field"><label>Depósito</label><select id="f_adjust_warehouse">${warehouseSelectOptions()}</select></div>
+      <div class="field"><label>Tipo</label>
+        <select id="f_adjust_type">
+          <option value="IN">Sumar (entrada)</option>
+          <option value="OUT">Restar (salida)</option>
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>Cantidad</label><input id="f_adjust_qty" type="number" step="0.001" placeholder="0"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitStockAdjust()">Ajustar</button>
+    </div>
+  `);
+}
+async function submitStockAdjust() {
+  try {
+    await api('/stock/adjust', {
+      method: 'POST',
+      body: JSON.stringify({
+        article_id: Number(document.getElementById('f_adjust_article').value),
+        warehouse_id: Number(document.getElementById('f_adjust_warehouse').value),
+        quantity: Number(document.getElementById('f_adjust_qty').value),
+        type: document.getElementById('f_adjust_type').value,
+      }),
+    });
+    closeModal();
+    toast('Stock ajustado correctamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function showKardex(articleId, name) {
   const rows = await api(`/stock/kardex/${articleId}`);
   openModal(`
     <h2>Kardex — ${name}</h2>
-    ${tableOrEmpty(rows, ['Fecha', 'Depósito', 'Tipo', 'Cantidad', 'Origen'], (m) => `
+    ${tableOrEmpty(rows, ['Fecha', 'Depósito', 'Tipo', 'Cantidad', 'Origen', ''], (m) => `
       <tr>
         <td class="mono">${fmtDate(m.created_at)}</td>
         <td>${m.warehouse_name}</td>
         <td>${m.type === 'IN' ? 'Entrada' : 'Salida'}</td>
         <td class="num ${m.type === 'IN' ? 'income' : 'expense'}">${fmtQty(m.quantity)}</td>
         <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteStockMovement(${m.id}, ${articleId}, '${name.replace(/'/g, "\\'")}')">Eliminar</button></td>
       </tr>`, 'Sin movimientos registrados.')}
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
   `);
+}
+async function deleteStockMovement(id, articleId, name) {
+  if (!confirm('¿Eliminar esta carga de stock? El stock del depósito se recalculará automáticamente.')) return;
+  try {
+    await api(`/stock-movements/${id}`, { method: 'DELETE' });
+    toast('Carga de stock eliminada.');
+    await showKardex(articleId, name);
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---------------------------------------------------------
@@ -1023,7 +1112,7 @@ async function loadCashBoxMovements() {
   const resultEl = document.getElementById('cashMovementsResult');
   if (!id) { resultEl.innerHTML = ''; return; }
   const rows = await api(`/cash-boxes/${id}/movements`);
-  resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
+  resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen', ''], (m) => `
     <tr>
       <td class="mono">${fmtDate(m.created_at)}</td>
       <td>${m.business_unit_name || '-'}</td>
@@ -1031,7 +1120,17 @@ async function loadCashBoxMovements() {
       <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
       <td>${m.description || '-'}</td>
       <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
+      <td>${m.origin_type === 'MANUAL' ? `<button class="btn btn-sm btn-danger" onclick="deleteCashMovement(${m.id})">Eliminar</button>` : '-'}</td>
     </tr>`, 'Esta caja no tiene movimientos registrados.');
+}
+async function deleteCashMovement(id) {
+  if (!confirm('¿Eliminar este movimiento de caja?')) return;
+  try {
+    await api(`/cash-movements/${id}`, { method: 'DELETE' });
+    toast('Movimiento eliminado.');
+    loadCashBoxMovements();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function createCashMovement() {
