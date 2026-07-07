@@ -318,6 +318,7 @@ async function renderStock() {
           <td>
             <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Kardex</button>
             <button class="btn btn-sm btn-danger" onclick="quickRemoveStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Quitar unidades</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteStockRow(${s.id}, '${s.description.replace(/'/g, "\\'")}')">Eliminar registro</button>
           </td>
         </tr>`, 'No hay stock cargado en esta unidad todavía. Cargá una compra confirmada para generar stock.')}
     </div>
@@ -412,6 +413,15 @@ async function quickRemoveStock(articleId, warehouseId, name, currentQty) {
       body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'OUT' }),
     });
     toast('Unidades quitadas del stock.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteStockRow(stockId, name) {
+  if (!confirm(`¿Eliminar por completo el registro de stock de "${name}"? Esto lo saca del listado (equivale a dejarlo en cero).`)) return;
+  if (!(await verifyPasswordPrompt('eliminar registro de stock'))) return;
+  try {
+    await api(`/stock/${stockId}`, { method: 'DELETE' });
+    toast('Registro de stock eliminado.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1091,7 +1101,10 @@ async function renderCash() {
     </div>
 
     <div class="card">
-      <div class="card-title">Movimientos por caja o sobre</div>
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Movimientos por caja o sobre</div>
+        <button class="btn btn-sm" onclick="downloadFile('/cash-movements/export-manual', 'movimientos_manuales.xlsx')">Exportar movimientos manuales (Excel)</button>
+      </div>
       <div class="field" style="max-width:280px">
         <label>Filtrar</label>
         <select id="cashFilterSelect" onchange="loadCashBoxMovements()">
@@ -1145,6 +1158,23 @@ async function submitManualBalance(sessionId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function downloadFile(path, fallbackName) {
+  try {
+    const token = getToken();
+    const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) { toast('No se pudo generar el archivo.', 'error'); return; }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="(.+)"/);
+    const filename = match ? match[1] : fallbackName;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast('Error al descargar el archivo.', 'error'); }
+}
+
 function selectCashBoxFilter(id) {
   document.getElementById('cashFilterSelect').value = id;
   loadCashBoxMovements();
@@ -1156,7 +1186,12 @@ async function loadCashBoxMovements() {
   const resultEl = document.getElementById('cashMovementsResult');
   if (!id) { resultEl.innerHTML = ''; return; }
   const rows = await api(`/cash-boxes/${id}/movements`);
-  resultEl.innerHTML = tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen', ''], (m) => `
+  const boxName = state.cache.cashBoxes.find(b => b.id === Number(id))?.name || 'caja';
+  resultEl.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="downloadFile('/cash-boxes/${id}/export', 'movimientos_${boxName}.xlsx')">Exportar esta caja a Excel</button>
+    </div>
+    ${tableOrEmpty(rows, ['Fecha', 'Unidad', 'Tipo', 'Monto', 'Descripción', 'Origen', ''], (m) => `
     <tr>
       <td class="mono">${fmtDate(m.created_at)}</td>
       <td>${m.business_unit_name || '-'}</td>
@@ -1165,7 +1200,8 @@ async function loadCashBoxMovements() {
       <td>${m.description || '-'}</td>
       <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
       <td><button class="btn btn-sm btn-danger" onclick="deleteCashMovement(${m.id})">Eliminar</button></td>
-    </tr>`, 'Esta caja no tiene movimientos registrados.');
+    </tr>`, 'Esta caja no tiene movimientos registrados.')}
+  `;
 }
 async function verifyPasswordPrompt(actionLabel) {
   const password = prompt(`Ingresá tu contraseña para confirmar: ${actionLabel}`);

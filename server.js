@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const XLSX = require('xlsx');
 require('dotenv').config();
 const pool = require('./db');
 
@@ -260,6 +261,58 @@ app.get('/cash-boxes/:id/movements', async (req, res) => {
     ORDER BY cm.created_at DESC
   `, [id]);
   res.json(r.rows);
+});
+
+function buildMovementsWorkbook(rows, sheetName) {
+  const data = rows.map(r => ({
+    Fecha: new Date(r.created_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
+    Caja: r.cash_box_name || '',
+    'Unidad de negocio': r.business_unit_name || '',
+    Tipo: r.type === 'INCOME' ? 'Ingreso' : 'Egreso',
+    Monto: Number(r.amount),
+    Descripción: r.description || '',
+    Origen: r.origin_type || '',
+    'N° Origen': r.origin_id || '',
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 30 }, { wch: 12 }, { wch: 10 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+app.get('/cash-boxes/:id/export', async (req, res) => {
+  const { id } = req.params;
+  const r = await pool.query(`
+    SELECT cm.*, cb.name AS cash_box_name, bu.name AS business_unit_name
+    FROM cash_movement cm
+    JOIN cash_session cs ON cs.id = cm.cash_session_id
+    JOIN cash_box cb ON cb.id = cs.cash_box_id
+    LEFT JOIN business_unit bu ON bu.id = cm.business_unit_id
+    WHERE cs.cash_box_id = $1
+    ORDER BY cm.created_at DESC
+  `, [id]);
+  const boxName = r.rows[0]?.cash_box_name || 'caja';
+  const buffer = buildMovementsWorkbook(r.rows, boxName.substring(0, 30));
+  res.setHeader('Content-Disposition', `attachment; filename="movimientos_${boxName.replace(/\s+/g, '_')}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buffer);
+});
+
+app.get('/cash-movements/export-manual', async (req, res) => {
+  const r = await pool.query(`
+    SELECT cm.*, cb.name AS cash_box_name, bu.name AS business_unit_name
+    FROM cash_movement cm
+    JOIN cash_session cs ON cs.id = cm.cash_session_id
+    JOIN cash_box cb ON cb.id = cs.cash_box_id
+    LEFT JOIN business_unit bu ON bu.id = cm.business_unit_id
+    WHERE cm.origin_type = 'MANUAL'
+    ORDER BY cm.created_at DESC
+  `);
+  const buffer = buildMovementsWorkbook(r.rows, 'Movimientos manuales');
+  res.setHeader('Content-Disposition', `attachment; filename="movimientos_manuales.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buffer);
 });
 
 app.post('/cash-sessions/:id/close', async (req, res) => {
@@ -535,6 +588,15 @@ app.get('/stock/kardex/:article_id', async (req, res) => {
   const { article_id } = req.params;
   const r = await pool.query('SELECT * FROM article_kardex WHERE article_id=$1', [article_id]);
   res.json(r.rows);
+});
+
+app.delete('/stock/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM stock WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.post('/stock/transfer', async (req, res) => {
