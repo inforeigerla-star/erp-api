@@ -270,6 +270,17 @@ app.post('/cash-sessions/:id/close', async (req, res) => {
   res.json(r.rows[0]);
 });
 
+app.put('/cash-sessions/:id/opening', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { opening_amount } = req.body;
+    const r = await pool.query('UPDATE cash_session SET opening_amount=$1 WHERE id=$2 RETURNING *', [opening_amount, id]);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post('/cash-sessions/:id/reopen', async (req, res) => {
   const { id } = req.params;
   const r = await pool.query(`UPDATE cash_session SET status='OPEN', closed_at=NULL WHERE id=$1 RETURNING *`, [id]);

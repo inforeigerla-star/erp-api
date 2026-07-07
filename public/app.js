@@ -1069,14 +1069,15 @@ async function renderCash() {
   const sobres = dashboard.filter(b => b.kind === 'SOBRE');
 
   const tile = (b) => `
-    <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}" onclick="selectCashBoxFilter(${b.cash_box_id})">
-      <div class="cashbox-tile-name">${b.name}</div>
-      <div class="cashbox-tile-balance">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
+    <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}">
+      <div class="cashbox-tile-name" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.name}</div>
+      <div class="cashbox-tile-balance" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
       <div class="cashbox-tile-meta">
         <span class="income">+${fmtMoney(b.total_income)}</span>
         <span class="expense">−${fmtMoney(b.total_expense)}</span>
       </div>
       <div class="cashbox-tile-currency">${b.currency}</div>
+      <button class="btn btn-sm" style="margin-top:10px;width:100%" onclick="openManualBalanceModal(${b.cash_session_id}, '${b.name.replace(/'/g, "\\'")}', ${b.current_balance})">Ajustar saldo base</button>
     </div>`;
 
   el.innerHTML = `
@@ -1118,6 +1119,30 @@ async function renderCash() {
       <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
     </div>
   `;
+}
+
+async function openManualBalanceModal(sessionId, boxName, currentBalance) {
+  if (!(await verifyPasswordPrompt(`ajustar el saldo base de "${boxName}"`))) return;
+  openModal(`
+    <h2>Ajustar saldo base — ${boxName}</h2>
+    <div class="hint" style="margin-bottom:14px">Saldo actual mostrado: <strong>$ ${fmtMoney(currentBalance)}</strong>. Este ajuste modifica el monto de apertura de la caja/sobre directamente.</div>
+    <div class="field"><label>Nuevo monto de apertura</label><input id="f_new_opening" type="number" step="0.01" placeholder="0.00"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitManualBalance(${sessionId})">Guardar</button>
+    </div>
+  `);
+}
+async function submitManualBalance(sessionId) {
+  try {
+    await api(`/cash-sessions/${sessionId}/opening`, {
+      method: 'PUT',
+      body: JSON.stringify({ opening_amount: Number(document.getElementById('f_new_opening').value) }),
+    });
+    closeModal();
+    toast('Saldo base actualizado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function selectCashBoxFilter(id) {
