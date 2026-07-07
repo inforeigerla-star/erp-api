@@ -524,6 +524,20 @@ table.ledger tr:hover td { background: #FAFAFA; }
   background: #FBFBFA;
 }
 .cashbox-tile:hover { border-color: var(--ink); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.cashbox-tile-icon {
+  font-size: 22px;
+  margin-bottom: 8px;
+  line-height: 1;
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+.cashbox-tile-logo {
+  max-height: 26px;
+  max-width: 100%;
+  object-fit: contain;
+}
+.cashbox-tile-emoji { font-size: 22px; }
 .cashbox-tile-name {
   font-size: 12px;
   font-weight: 600;

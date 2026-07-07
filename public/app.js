@@ -1080,8 +1080,32 @@ async function renderCash() {
   const cajas = dashboard.filter(b => b.kind === 'CAJA');
   const sobres = dashboard.filter(b => b.kind === 'SOBRE');
 
-  const tile = (b) => `
+function cashBoxIcon(name, kind) {
+  const n = name.toLowerCase();
+  const logoMap = {
+    'mercado pago': 'assets/icons/mercadopago.png',
+    'macro pesos': 'assets/icons/macro.png',
+    'macro dólares': 'assets/icons/macro.png',
+    'macro dolares': 'assets/icons/macro.png',
+    'gnb': 'assets/icons/gnb.png',
+    'reiger': 'assets/icons/reiger.png',
+    'endless': 'assets/icons/endless.png',
+    'sadev': 'assets/icons/sadev.png',
+    'peugeot': 'assets/icons/peugeot.png',
+  };
+  for (const key in logoMap) {
+    if (n.includes(key)) return `<img src="${logoMap[key]}" alt="${name}" class="cashbox-tile-logo">`;
+  }
+  const emojiMap = { 'inversión': '📈', 'inversion': '📈', 'ganancia': '💹', 'taller': '🔧' };
+  for (const key in emojiMap) {
+    if (n.includes(key)) return `<span class="cashbox-tile-emoji">${emojiMap[key]}</span>`;
+  }
+  return `<span class="cashbox-tile-emoji">${kind === 'SOBRE' ? '✉️' : '💰'}</span>`;
+}
+
+const tile = (b) => `
     <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}">
+      <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
       <div class="cashbox-tile-name" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.name}</div>
       <div class="cashbox-tile-balance" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
       <div class="cashbox-tile-meta">
