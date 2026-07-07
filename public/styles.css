@@ -1,8 +1,8 @@
 :root {
   --bg: #F2F2F3;
   --card: #FFFFFF;
-  --sidebar: #0B0B0C;
-  --sidebar-alt: #131315;
+  --sidebar: #23252A;
+  --sidebar-alt: #2C2E34;
   --sidebar-text: #B8B8BD;
   --sidebar-text-dim: #58585D;
   --accent-soft: #ECECEE;
@@ -19,6 +19,7 @@
   --shadow-sm: 0 1px 2px rgba(16,16,18,0.04), 0 1px 1px rgba(16,16,18,0.03);
   --shadow-md: 0 8px 24px rgba(16,16,18,0.08), 0 2px 6px rgba(16,16,18,0.04);
   --shadow-lg: 0 24px 64px rgba(0,0,0,0.35);
+  --bu-accent: #2F6F4E;
 }
 
 * { box-sizing: border-box; }
@@ -51,6 +52,8 @@ button, input, select { font-family: inherit; font-size: inherit; }
   top: 0;
   height: 100vh;
   box-shadow: 1px 0 0 rgba(255,255,255,0.04) inset;
+  border-top: 4px solid var(--bu-accent);
+  transition: border-color 0.25s ease;
 }
 
 .brand {
