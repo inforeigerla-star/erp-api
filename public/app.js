@@ -315,7 +315,10 @@ async function renderStock() {
           <td>${s.description}</td>
           <td>${s.warehouse_name}</td>
           <td class="num">${fmtQty(s.quantity)}</td>
-          <td><button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Kardex</button></td>
+          <td>
+            <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Kardex</button>
+            <button class="btn btn-sm btn-danger" onclick="quickRemoveStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Quitar unidades</button>
+          </td>
         </tr>`, 'No hay stock cargado en esta unidad todavía. Cargá una compra confirmada para generar stock.')}
     </div>
   `;
@@ -393,6 +396,22 @@ async function submitStockAdjust() {
     });
     closeModal();
     toast('Stock ajustado correctamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function quickRemoveStock(articleId, warehouseId, name, currentQty) {
+  const input = prompt(`Cantidad a quitar de "${name}" (disponible: ${fmtQty(currentQty)}):`);
+  if (input === null) return;
+  const qty = Number(input);
+  if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
+  if (!(await verifyPasswordPrompt('quitar unidades de stock'))) return;
+  try {
+    await api('/stock/adjust', {
+      method: 'POST',
+      body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'OUT' }),
+    });
+    toast('Unidades quitadas del stock.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1120,11 +1139,23 @@ async function loadCashBoxMovements() {
       <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
       <td>${m.description || '-'}</td>
       <td class="mono">${m.origin_type || '-'} ${m.origin_id ? '#' + m.origin_id : ''}</td>
-      <td>${m.origin_type === 'MANUAL' ? `<button class="btn btn-sm btn-danger" onclick="deleteCashMovement(${m.id})">Eliminar</button>` : '-'}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteCashMovement(${m.id})">Eliminar</button></td>
     </tr>`, 'Esta caja no tiene movimientos registrados.');
+}
+async function verifyPasswordPrompt(actionLabel) {
+  const password = prompt(`Ingresá tu contraseña para confirmar: ${actionLabel}`);
+  if (password === null) return false;
+  try {
+    await api('/auth/verify-password', { method: 'POST', body: JSON.stringify({ password }) });
+    return true;
+  } catch (e) {
+    toast(e.message, 'error');
+    return false;
+  }
 }
 async function deleteCashMovement(id) {
   if (!confirm('¿Eliminar este movimiento de caja?')) return;
+  if (!(await verifyPasswordPrompt('eliminar movimiento de caja'))) return;
   try {
     await api(`/cash-movements/${id}`, { method: 'DELETE' });
     toast('Movimiento eliminado.');
@@ -1134,6 +1165,7 @@ async function deleteCashMovement(id) {
 }
 
 async function createCashMovement() {
+  if (!(await verifyPasswordPrompt('ajustar caja o sobre'))) return;
   try {
     await api('/cash-movements', {
       method: 'POST',

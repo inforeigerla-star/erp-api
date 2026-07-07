@@ -49,7 +49,18 @@ app.post('/auth/login', async (req, res) => {
 // A partir de acá, todo requiere estar logueado
 app.use(authRequired);
 
-// ---------- USERS (solo admin) ----------
+app.post('/auth/verify-password', async (req, res) => {
+  try {
+    const { password } = req.body;
+    const r = await pool.query('SELECT * FROM app_user WHERE id=$1', [req.user.id]);
+    const user = r.rows[0];
+    const ok = user && await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Contraseña incorrecta' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get('/users', adminRequired, async (req, res) => {
   const r = await pool.query('SELECT id, username, role, active, created_at FROM app_user ORDER BY id');
   res.json(r.rows);
