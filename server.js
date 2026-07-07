@@ -231,6 +231,43 @@ app.get('/cash-boxes', async (req, res) => {
   res.json(r.rows);
 });
 
+app.post('/cash-boxes', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { name, currency, kind } = req.body;
+    await client.query('BEGIN');
+    const boxR = await client.query(
+      'INSERT INTO cash_box (name, currency, kind) VALUES ($1,$2,$3) RETURNING *',
+      [name, currency || 'ARS', kind || 'CAJA']
+    );
+    const box = boxR.rows[0];
+    await client.query(
+      'INSERT INTO cash_session (cash_box_id, opening_amount, status) VALUES ($1,0,\'OPEN\')',
+      [box.id]
+    );
+    await client.query('COMMIT');
+    res.json(box);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/cash-boxes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM sale_collection WHERE cash_box_id=$1', [id]);
+    await pool.query('DELETE FROM cash_movement WHERE cash_session_id IN (SELECT id FROM cash_session WHERE cash_box_id=$1)', [id]);
+    await pool.query('DELETE FROM cash_session WHERE cash_box_id=$1', [id]);
+    await pool.query('DELETE FROM cash_box WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get('/cash-boxes/dashboard', async (req, res) => {
   const r = await pool.query(`
     SELECT

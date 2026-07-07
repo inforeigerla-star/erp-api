@@ -1072,7 +1072,9 @@ async function createOperation(kind) {
 // CAJA
 // ---------------------------------------------------------
 async function renderCash() {
-  document.getElementById('viewActions').innerHTML = '';
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="newCashBoxModal('CAJA')">+ Nueva caja</button>
+    <button class="btn btn-sm" onclick="newCashBoxModal('SOBRE')">+ Nuevo sobre</button>`;
   const el = document.getElementById('view');
   const dashboard = await api('/cash-boxes/dashboard');
   const cajas = dashboard.filter(b => b.kind === 'CAJA');
@@ -1088,6 +1090,7 @@ async function renderCash() {
       </div>
       <div class="cashbox-tile-currency">${b.currency}</div>
       <button class="btn btn-sm" style="margin-top:10px;width:100%" onclick="openManualBalanceModal(${b.cash_session_id}, '${b.name.replace(/'/g, "\\'")}', ${b.current_balance})">Ajustar saldo base</button>
+      <button class="btn btn-sm btn-danger" style="margin-top:6px;width:100%" onclick="deleteCashBox(${b.cash_box_id}, '${b.name.replace(/'/g, "\\'")}')">Eliminar</button>
     </div>`;
 
   el.innerHTML = `
@@ -1181,6 +1184,48 @@ function selectCashBoxFilter(id) {
   document.getElementById('cashFilterSelect').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
+function newCashBoxModal(kind) {
+  openModal(`
+    <h2>Nueva ${kind === 'SOBRE' ? 'sobre' : 'caja'}</h2>
+    <div class="field"><label>Nombre</label><input id="f_box_name" placeholder="Ej: ${kind === 'SOBRE' ? 'Sobre Depósito Sur' : 'Banco Galicia'}"></div>
+    <div class="field"><label>Moneda</label>
+      <select id="f_box_currency">
+        <option value="ARS">Pesos argentinos (ARS)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitNewCashBox('${kind}')">Guardar</button>
+    </div>
+  `);
+}
+async function submitNewCashBox(kind) {
+  const name = document.getElementById('f_box_name').value;
+  if (!name.trim()) { toast('Ingresá un nombre.', 'error'); return; }
+  if (!(await verifyPasswordPrompt(`crear ${kind === 'SOBRE' ? 'el sobre' : 'la caja'} "${name}"`))) return;
+  try {
+    await api('/cash-boxes', {
+      method: 'POST',
+      body: JSON.stringify({ name, currency: document.getElementById('f_box_currency').value, kind }),
+    });
+    closeModal();
+    toast(`${kind === 'SOBRE' ? 'Sobre' : 'Caja'} creado.`);
+    await loadMasterData();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteCashBox(id, name) {
+  if (!confirm(`¿Eliminar "${name}"? Se borrará también su historial de movimientos.`)) return;
+  if (!(await verifyPasswordPrompt(`eliminar "${name}"`))) return;
+  try {
+    await api(`/cash-boxes/${id}`, { method: 'DELETE' });
+    toast('Eliminado correctamente.');
+    await loadMasterData();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function loadCashBoxMovements() {
   const id = document.getElementById('cashFilterSelect').value;
   const resultEl = document.getElementById('cashMovementsResult');
@@ -1226,7 +1271,6 @@ async function deleteCashMovement(id) {
 }
 
 async function createCashMovement() {
-  if (!(await verifyPasswordPrompt('ajustar caja o sobre'))) return;
   try {
     await api('/cash-movements', {
       method: 'POST',
