@@ -127,11 +127,22 @@ app.get('/projects', async (req, res) => {
   res.json(r.rows);
 });
 app.delete('/projects/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM project WHERE id=$1', [req.params.id]);
+    const { id } = req.params;
+    await client.query('BEGIN');
+    await client.query('UPDATE cash_movement SET project_id=NULL WHERE project_id=$1', [id]);
+    await client.query('UPDATE purchase SET project_id=NULL WHERE project_id=$1', [id]);
+    await client.query('UPDATE sale SET project_id=NULL WHERE project_id=$1', [id]);
+    await client.query('UPDATE sale_collection SET project_id=NULL WHERE project_id=$1', [id]);
+    await client.query('DELETE FROM project WHERE id=$1', [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -149,11 +160,26 @@ app.get('/suppliers', async (req, res) => {
   res.json(r.rows);
 });
 app.delete('/suppliers/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM supplier WHERE id=$1', [req.params.id]);
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const purchases = await client.query('SELECT id FROM purchase WHERE supplier_id=$1', [id]);
+    for (const p of purchases.rows) {
+      await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [p.id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
+      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
+      await client.query('DELETE FROM purchase WHERE id=$1', [p.id]);
+    }
+    await client.query('DELETE FROM supplier_account_movement WHERE supplier_id=$1', [id]);
+    await client.query('DELETE FROM supplier WHERE id=$1', [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -170,11 +196,27 @@ app.get('/customers', async (req, res) => {
   res.json(r.rows);
 });
 app.delete('/customers/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM customer WHERE id=$1', [req.params.id]);
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const sales = await client.query('SELECT id FROM sale WHERE customer_id=$1', [id]);
+    for (const s of sales.rows) {
+      await client.query('DELETE FROM sale_item WHERE sale_id=$1', [s.id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
+      await client.query('DELETE FROM sale_collection WHERE sale_id=$1', [s.id]);
+      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
+      await client.query('DELETE FROM sale WHERE id=$1', [s.id]);
+    }
+    await client.query('DELETE FROM customer_account_movement WHERE customer_id=$1', [id]);
+    await client.query('DELETE FROM customer WHERE id=$1', [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -192,11 +234,42 @@ app.get('/warehouses', async (req, res) => {
   res.json(r.rows);
 });
 app.delete('/warehouses/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM warehouse WHERE id=$1', [req.params.id]);
+    const { id } = req.params;
+    await client.query('BEGIN');
+
+    // Eliminar compras que usaron este depósito (con toda su cascada)
+    const purchases = await client.query('SELECT id FROM purchase WHERE warehouse_id=$1', [id]);
+    for (const p of purchases.rows) {
+      await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [p.id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
+      await client.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [p.id]);
+      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
+      await client.query('DELETE FROM purchase WHERE id=$1', [p.id]);
+    }
+    // Eliminar ventas que usaron este depósito (con toda su cascada)
+    const sales = await client.query('SELECT id FROM sale WHERE warehouse_id=$1', [id]);
+    for (const s of sales.rows) {
+      await client.query('DELETE FROM sale_item WHERE sale_id=$1', [s.id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
+      await client.query('DELETE FROM customer_account_movement WHERE sale_id=$1', [s.id]);
+      await client.query('DELETE FROM sale_collection WHERE sale_id=$1', [s.id]);
+      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
+      await client.query('DELETE FROM sale WHERE id=$1', [s.id]);
+    }
+
+    await client.query('DELETE FROM stock_movement WHERE warehouse_id=$1', [id]);
+    await client.query('DELETE FROM stock WHERE warehouse_id=$1', [id]);
+    await client.query('DELETE FROM warehouse WHERE id=$1', [id]);
+
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -216,12 +289,22 @@ app.get('/articles', async (req, res) => {
 });
 
 app.delete('/articles/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM article WHERE id=$1', [id]);
+    await client.query('BEGIN');
+    await client.query('DELETE FROM purchase_item WHERE article_id=$1', [id]);
+    await client.query('DELETE FROM sale_item WHERE article_id=$1', [id]);
+    await client.query('DELETE FROM stock_movement WHERE article_id=$1', [id]);
+    await client.query('DELETE FROM stock WHERE article_id=$1', [id]);
+    await client.query('DELETE FROM article WHERE id=$1', [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
