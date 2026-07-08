@@ -137,7 +137,7 @@ async function loadBusinessUnits() {
 
 const BU_THEME = {
   reiger: { logo: 'assets/icons/reiger.png', accent: '#B9006E' },
-  endless: { logo: 'assets/icons/endless.png', accent: '#F5D800' },
+  endless: { logo: 'assets/icons/endless.png', accent: '#B89B2E' },
   sadev: { logo: 'assets/icons/sadev.png', accent: '#3E7CD6' },
   peugeot: { logo: 'assets/icons/peugeot.png', accent: '#8A8A8A' },
 };
