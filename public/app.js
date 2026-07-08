@@ -371,20 +371,22 @@ async function renderStock() {
   `;
 }
 
-function articleSelectOptions() {
-  return artByBU().map(a => `<option value="${a.article_id}">${a.code} — ${a.description}</option>`).join('');
+function articleItemsList() {
+  return artByBU().map(a => ({ id: a.article_id, label: `${a.code} — ${a.description}` }));
 }
-function warehouseSelectOptions() {
-  return whByBU().map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+function warehouseItemsList() {
+  return whByBU().map(w => ({ id: w.id, label: w.name }));
 }
 
 function openStockTransferModal() {
+  const artItems = articleItemsList();
+  const whItems = warehouseItemsList();
   openModal(`
     <h2>Transferir stock entre depósitos</h2>
-    <div class="field"><label>Artículo</label><select id="f_transfer_article">${articleSelectOptions()}</select></div>
+    <div class="field"><label>Artículo</label>${searchableSelectHtml('transfer_article', artItems, 'Buscar artículo…')}</div>
     <div class="field-row">
-      <div class="field"><label>Depósito origen</label><select id="f_transfer_from">${warehouseSelectOptions()}</select></div>
-      <div class="field"><label>Depósito destino</label><select id="f_transfer_to">${warehouseSelectOptions()}</select></div>
+      <div class="field"><label>Depósito origen</label>${searchableSelectHtml('transfer_from', whItems, 'Buscar depósito…')}</div>
+      <div class="field"><label>Depósito destino</label>${searchableSelectHtml('transfer_to', whItems, 'Buscar depósito…')}</div>
     </div>
     <div class="field"><label>Cantidad</label><input id="f_transfer_qty" type="number" step="0.001" placeholder="0"></div>
     <div class="modal-actions">
@@ -398,9 +400,9 @@ async function submitStockTransfer() {
     await api('/stock/transfer', {
       method: 'POST',
       body: JSON.stringify({
-        article_id: Number(document.getElementById('f_transfer_article').value),
-        from_warehouse_id: Number(document.getElementById('f_transfer_from').value),
-        to_warehouse_id: Number(document.getElementById('f_transfer_to').value),
+        article_id: Number(getSearchableValue('transfer_article')),
+        from_warehouse_id: Number(getSearchableValue('transfer_from')),
+        to_warehouse_id: Number(getSearchableValue('transfer_to')),
         quantity: Number(document.getElementById('f_transfer_qty').value),
       }),
     });
@@ -411,11 +413,13 @@ async function submitStockTransfer() {
 }
 
 function openStockAdjustModal() {
+  const artItems = articleItemsList();
+  const whItems = warehouseItemsList();
   openModal(`
     <h2>Ajustar stock</h2>
-    <div class="field"><label>Artículo</label><select id="f_adjust_article">${articleSelectOptions()}</select></div>
+    <div class="field"><label>Artículo</label>${searchableSelectHtml('adjust_article', artItems, 'Buscar artículo…')}</div>
     <div class="field-row">
-      <div class="field"><label>Depósito</label><select id="f_adjust_warehouse">${warehouseSelectOptions()}</select></div>
+      <div class="field"><label>Depósito</label>${searchableSelectHtml('adjust_warehouse', whItems, 'Buscar depósito…')}</div>
       <div class="field"><label>Tipo</label>
         <select id="f_adjust_type">
           <option value="IN">Sumar (entrada)</option>
@@ -435,8 +439,8 @@ async function submitStockAdjust() {
     await api('/stock/adjust', {
       method: 'POST',
       body: JSON.stringify({
-        article_id: Number(document.getElementById('f_adjust_article').value),
-        warehouse_id: Number(document.getElementById('f_adjust_warehouse').value),
+        article_id: Number(getSearchableValue('adjust_article')),
+        warehouse_id: Number(getSearchableValue('adjust_warehouse')),
         quantity: Number(document.getElementById('f_adjust_qty').value),
         type: document.getElementById('f_adjust_type').value,
       }),
@@ -943,8 +947,8 @@ function collectionBadge(status) {
 }
 
 function openCollectModal(saleId, remaining) {
-  const boxOptions = state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('');
-  const projOptions = `<option value="">Sin proyecto</option>` + projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  const boxItems = state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.currency})` }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
   openModal(`
     <h2>Procesar cobro — Venta #${saleId}</h2>
     <div class="hint" style="margin-bottom:14px">Saldo pendiente: <strong>$ ${fmtMoney(remaining)}</strong>. Repartí el monto cobrado entre una o más cajas.</div>
@@ -955,8 +959,8 @@ function openCollectModal(saleId, remaining) {
       <button class="btn btn-primary" onclick="submitCollect(${saleId})">Confirmar cobro</button>
     </div>
   `);
-  window._collectBoxOptions = boxOptions;
-  window._collectProjOptions = projOptions;
+  window._collectBoxItems = boxItems;
+  window._collectProjItems = projItems;
   addCollectSplit();
 }
 let collectSplitCount = 0;
@@ -967,9 +971,9 @@ function addCollectSplit() {
   row.className = 'line-item-row';
   row.id = `csplit_${id}`;
   row.innerHTML = `
-    <select id="cbox_${id}">${window._collectBoxOptions}</select>
+    ${searchableSelectHtml(`cbox_${id}`, window._collectBoxItems, 'Buscar caja…')}
     <input type="number" step="0.01" placeholder="Monto" id="camount_${id}">
-    <select id="cproj_${id}">${window._collectProjOptions}</select>
+    ${searchableSelectHtml(`cproj_${id}`, window._collectProjItems, 'Buscar proyecto…', 'Sin proyecto')}
     <button class="remove-line" onclick="document.getElementById('csplit_${id}').remove()">×</button>
   `;
   container.appendChild(row);
@@ -979,9 +983,9 @@ async function submitCollect(saleId) {
   const splits = rows.map(row => {
     const idx = row.id.replace('csplit_', '');
     return {
-      cash_box_id: Number(document.getElementById(`cbox_${idx}`).value),
+      cash_box_id: Number(getSearchableValue(`cbox_${idx}`)),
       amount: Number(document.getElementById(`camount_${idx}`).value),
-      project_id: document.getElementById(`cproj_${idx}`).value ? Number(document.getElementById(`cproj_${idx}`).value) : null,
+      project_id: getSearchableValue(`cproj_${idx}`) ? Number(getSearchableValue(`cproj_${idx}`)) : null,
     };
   }).filter(s => s.amount > 0);
 
@@ -1107,21 +1111,22 @@ function customerName(id) {
 let lineItemCount = 0;
 function newOperationModal(kind) {
   const isPurchase = kind === 'purchase';
-  const contactOptions = (isPurchase ? state.cache.suppliers : state.cache.customers)
-    .map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  const whOptions = whByBU().map(w => `<option value="${w.id}">${w.name}</option>`).join('');
-  const projOptions = `<option value="">Sin proyecto</option>` + projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  const contactItems = (isPurchase ? state.cache.suppliers : state.cache.customers)
+    .map(c => ({ id: c.id, label: c.name }));
+  const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  const cashBoxItems = state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})` }));
 
   lineItemCount = 0;
   totalManuallyEdited = false;
   openModal(`
     <h2>${isPurchase ? 'Nueva compra' : 'Nueva venta'}</h2>
     <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
-      <select id="f_contact">${contactOptions || '<option value="">— cargá uno primero —</option>'}</select>
+      ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`)}
     </div>
     <div class="field-row">
-      <div class="field"><label>Depósito</label><select id="f_warehouse">${whOptions || '<option value="">— cargá uno primero —</option>'}</select></div>
-      <div class="field"><label>Proyecto (opcional)</label><select id="f_project">${projOptions}</select></div>
+      <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…')}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
     ${!isPurchase ? `
     <div class="field"><label>Moneda de la venta</label>
@@ -1139,7 +1144,7 @@ function newOperationModal(kind) {
     </div>
     <div class="field" id="paymentBoxField">
       <label>Caja o sobre de destino</label>
-      <select id="f_cashbox">${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})</option>`).join('')}</select>
+      ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…')}
     </div>
 
     <div class="field"><label>Artículos</label>
@@ -1265,13 +1270,13 @@ async function createOperation(kind) {
 
   const payload = {
     business_unit_id: state.selectedBU,
-    warehouse_id: Number(document.getElementById('f_warehouse').value),
-    project_id: document.getElementById('f_project').value ? Number(document.getElementById('f_project').value) : null,
+    warehouse_id: Number(getSearchableValue('warehouse')),
+    project_id: getSearchableValue('project') ? Number(getSearchableValue('project')) : null,
     payment_type: document.getElementById('f_payment').value,
-    cash_box_id: document.getElementById('f_payment').value === 'CASH' ? Number(document.getElementById('f_cashbox').value) : null,
+    cash_box_id: document.getElementById('f_payment').value === 'CASH' ? Number(getSearchableValue('cashbox')) : null,
     items,
   };
-  payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(document.getElementById('f_contact').value);
+  payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));
   if (!isPurchase) {
     payload.currency = document.getElementById('f_sale_currency').value;
     const overrideVal = document.getElementById('f_total_override').value;
@@ -1402,6 +1407,54 @@ async function submitManualBalance(sessionId) {
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
+
+// ---------------------------------------------------------
+// SELECTOR CON BUSCADOR INTELIGENTE (genérico, reutilizable)
+// ---------------------------------------------------------
+window._searchableSelectData = {};
+
+function searchableSelectHtml(baseId, items, placeholder, defaultLabel) {
+  window._searchableSelectData[baseId] = items;
+  return `
+    <div class="article-search-wrap">
+      <input type="text" class="article-search-input" id="ss_input_${baseId}" placeholder="${placeholder}"
+             value="${defaultLabel ? escAttr(defaultLabel) : ''}" autocomplete="off"
+             oninput="filterSearchableSelect('${baseId}')" onfocus="filterSearchableSelect('${baseId}')">
+      <input type="hidden" id="ss_value_${baseId}" value="${items[0]?.id ?? ''}">
+      <div class="article-search-results" id="ss_results_${baseId}"></div>
+    </div>`;
+}
+function filterSearchableSelect(baseId) {
+  const items = window._searchableSelectData[baseId] || [];
+  const query = (document.getElementById(`ss_input_${baseId}`)?.value || '').trim().toLowerCase();
+  const resultsEl = document.getElementById(`ss_results_${baseId}`);
+  if (!resultsEl) return;
+  const matches = query ? items.filter(i => i.label.toLowerCase().includes(query)) : items;
+  resultsEl.innerHTML = !matches.length
+    ? `<div class="article-search-empty">Sin resultados</div>`
+    : matches.slice(0, 40).map(i => `
+        <div class="article-search-item" onclick="selectSearchableOption('${baseId}', '${i.id}')">
+          <span class="article-search-desc">${i.label}</span>
+        </div>`).join('');
+  resultsEl.style.display = 'block';
+}
+function selectSearchableOption(baseId, id) {
+  const items = window._searchableSelectData[baseId] || [];
+  const item = items.find(i => String(i.id) === String(id));
+  if (!item) return;
+  document.getElementById(`ss_input_${baseId}`).value = item.label;
+  document.getElementById(`ss_value_${baseId}`).value = item.id;
+  document.getElementById(`ss_results_${baseId}`).style.display = 'none';
+  if (item.onSelect) item.onSelect();
+}
+function getSearchableValue(baseId) {
+  return document.getElementById(`ss_value_${baseId}`)?.value || '';
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.article-search-wrap')) {
+    document.querySelectorAll('.article-search-results').forEach(r => r.style.display = 'none');
+  }
+});
 
 async function downloadFile(path, fallbackName) {
   try {
