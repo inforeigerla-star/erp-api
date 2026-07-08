@@ -517,28 +517,65 @@ async function renderArticles() {
     </label>
     <button class="btn btn-sm" onclick="downloadImportTemplate('articles')">Plantilla Excel</button>
     <button class="btn btn-sm" onclick="triggerImport('articles')">Importar Excel</button>
+    <button class="btn btn-sm btn-danger" id="bulkDeleteArticlesBtn" style="display:none" onclick="bulkDeleteArticles()">Eliminar seleccionados</button>
     <button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
   const el = document.getElementById('view');
   const rows = artByBU();
   const withIva = document.getElementById('ivaToggle')?.checked;
   el.innerHTML = `
     <div class="card">
-      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Costo lista', `Precio ARS ${withIva ? '(c/IVA)' : '(s/IVA)'}`, `Precio USD ${withIva ? '(c/IVA)' : '(s/IVA)'}`, 'Obs.', ''], (a) => `
-        <tr>
-          <td class="mono">${a.code}</td>
-          <td class="mono">${a.alt_code || '-'}</td>
-          <td>${a.description}</td>
-          <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
-          <td class="num income">${articlePriceDisplay(a, 'ARS', withIva)}</td>
-          <td class="num income">${articlePriceDisplay(a, 'USD', withIva)}</td>
-          <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
-          <td>
-            <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
-          </td>
-        </tr>`, 'No hay artículos cargados en esta unidad.')}
+      <table class="ledger sortable-table">
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
+          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', `Precio ARS ${withIva ? '(c/IVA)' : '(s/IVA)'}`, `Precio USD ${withIva ? '(c/IVA)' : '(s/IVA)'}`, 'Obs.', ''].map(h => h
+            ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>`
+            : `<th></th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${rows.length ? rows.map(a => `
+            <tr>
+              <td><input type="checkbox" class="article-check" value="${a.article_id}" onchange="updateBulkDeleteButton()"></td>
+              <td class="mono">${a.code}</td>
+              <td class="mono">${a.alt_code || '-'}</td>
+              <td>${a.description}</td>
+              <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
+              <td class="num income">${articlePriceDisplay(a, 'ARS', withIva)}</td>
+              <td class="num income">${articlePriceDisplay(a, 'USD', withIva)}</td>
+              <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
+              <td>
+                <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
+              </td>
+            </tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">No hay artículos cargados en esta unidad.</div></td></tr>`}
+        </tbody>
+      </table>
     </div>
   `;
+}
+function toggleAllArticleChecks(checkbox) {
+  document.querySelectorAll('.article-check').forEach(c => c.checked = checkbox.checked);
+  updateBulkDeleteButton();
+}
+function updateBulkDeleteButton() {
+  const checked = document.querySelectorAll('.article-check:checked').length;
+  const btn = document.getElementById('bulkDeleteArticlesBtn');
+  if (btn) {
+    btn.style.display = checked > 0 ? 'inline-flex' : 'none';
+    btn.textContent = checked > 0 ? `Eliminar seleccionados (${checked})` : 'Eliminar seleccionados';
+  }
+}
+async function bulkDeleteArticles() {
+  const ids = [...document.querySelectorAll('.article-check:checked')].map(c => Number(c.value));
+  if (!ids.length) return;
+  if (!confirm(`¿Eliminar ${ids.length} artículo(s)? Esta acción no se puede deshacer.`)) return;
+  if (!(await verifyPasswordPrompt(`eliminar ${ids.length} artículos`))) return;
+  let ok = 0, failed = 0;
+  for (const id of ids) {
+    try { await api(`/articles/${id}`, { method: 'DELETE' }); ok++; } catch (e) { failed++; }
+  }
+  toast(failed ? `Eliminados: ${ok}. Con errores: ${failed}.` : `${ok} artículo(s) eliminado(s).`, failed ? 'error' : 'success');
+  await loadMasterData();
+  renderView();
 }
 
 function articlePriceFor(a, targetCurrency, withIva) {
