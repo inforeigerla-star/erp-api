@@ -1555,8 +1555,8 @@ async function downloadFile(path, fallbackName) {
 const IMPORT_TEMPLATES = {
   articles: {
     label: 'Artículos',
-    headers: ['code', 'alt_code', 'description', 'list_cost', 'currency', 'shipping_margin_pct', 'fx_margin_pct', 'profit_margin_pct', 'iva_pct'],
-    sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 'ARS', 5, 0, 30, 21],
+    headers: ['code', 'alt_code', 'description', 'list_cost', 'currency', 'shipping_margin_pct', 'fx_margin_pct', 'profit_margin_pct', 'iva_pct', 'price_ars', 'price_usd'],
+    sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 'ARS', 5, 0, 30, 21, '', 25],
     endpoint: '/articles',
     buildPayload: (row) => ({
       business_unit_id: state.selectedBU,
@@ -1568,7 +1568,9 @@ const IMPORT_TEMPLATES = {
       shipping_margin_pct: Number(row.shipping_margin_pct) || 0,
       fx_margin_pct: Number(row.fx_margin_pct) || 0,
       profit_margin_pct: Number(row.profit_margin_pct) || 0,
-      iva_pct: row.iva_pct != null ? Number(row.iva_pct) : 21,
+      iva_pct: row.iva_pct != null && row.iva_pct !== '' ? Number(row.iva_pct) : 21,
+      price_ars: row.price_ars != null && row.price_ars !== '' ? Number(row.price_ars) : null,
+      price_usd: row.price_usd != null && row.price_usd !== '' ? Number(row.price_usd) : null,
     }),
   },
   warehouses: {
