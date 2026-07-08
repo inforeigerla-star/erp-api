@@ -475,6 +475,8 @@ async function renderArticles() {
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin-right:8px">
       <input type="checkbox" id="ivaToggle" onchange="renderArticles()"> Mostrar con IVA
     </label>
+    <button class="btn btn-sm" onclick="downloadImportTemplate('articles')">Plantilla Excel</button>
+    <button class="btn btn-sm" onclick="triggerImport('articles')">Importar Excel</button>
     <button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
   const el = document.getElementById('view');
   const rows = artByBU();
@@ -598,7 +600,10 @@ async function createArticle() {
 // DEPÓSITOS
 // ---------------------------------------------------------
 async function renderWarehouses() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newWarehouseModal()">+ Nuevo depósito</button>`;
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="downloadImportTemplate('warehouses')">Plantilla Excel</button>
+    <button class="btn btn-sm" onclick="triggerImport('warehouses')">Importar Excel</button>
+    <button class="btn btn-primary" onclick="newWarehouseModal()">+ Nuevo depósito</button>`;
   const el = document.getElementById('view');
   const rows = whByBU();
   el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Estado', ''], (w) => `
@@ -638,7 +643,10 @@ async function deleteEntity(kind, id, name) {
 }
 
 async function renderSuppliers() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newContactModal('supplier')">+ Nuevo proveedor</button>`;
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="downloadImportTemplate('suppliers')">Plantilla Excel</button>
+    <button class="btn btn-sm" onclick="triggerImport('suppliers')">Importar Excel</button>
+    <button class="btn btn-primary" onclick="newContactModal('supplier')">+ Nuevo proveedor</button>`;
   const el = document.getElementById('view');
   const rows = state.cache.suppliers;
   const balances = await Promise.all(rows.map(s => api(`/suppliers/${s.id}/balance`)));
@@ -648,7 +656,10 @@ async function renderSuppliers() {
     'No hay proveedores cargados.')}</div>`;
 }
 async function renderCustomers() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newContactModal('customer')">+ Nuevo cliente</button>`;
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="downloadImportTemplate('customers')">Plantilla Excel</button>
+    <button class="btn btn-sm" onclick="triggerImport('customers')">Importar Excel</button>
+    <button class="btn btn-primary" onclick="newContactModal('customer')">+ Nuevo cliente</button>`;
   const el = document.getElementById('view');
   const rows = state.cache.customers;
   const balances = await Promise.all(rows.map(c => api(`/customers/${c.id}/balance`)));
@@ -1215,6 +1226,103 @@ async function downloadFile(path, fallbackName) {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   } catch (e) { toast('Error al descargar el archivo.', 'error'); }
+}
+
+// ---------------------------------------------------------
+// IMPORTAR DESDE EXCEL (artículos, depósitos, proveedores, clientes)
+// ---------------------------------------------------------
+const IMPORT_TEMPLATES = {
+  articles: {
+    label: 'Artículos',
+    headers: ['code', 'alt_code', 'description', 'list_cost', 'currency', 'shipping_margin_pct', 'fx_margin_pct', 'profit_margin_pct', 'iva_pct'],
+    sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 'ARS', 5, 0, 30, 21],
+    endpoint: '/articles',
+    buildPayload: (row) => ({
+      business_unit_id: state.selectedBU,
+      code: row.code,
+      alt_code: row.alt_code || '',
+      description: row.description,
+      list_cost: Number(row.list_cost) || 0,
+      currency: (row.currency || 'ARS').toUpperCase(),
+      shipping_margin_pct: Number(row.shipping_margin_pct) || 0,
+      fx_margin_pct: Number(row.fx_margin_pct) || 0,
+      profit_margin_pct: Number(row.profit_margin_pct) || 0,
+      iva_pct: row.iva_pct != null ? Number(row.iva_pct) : 21,
+    }),
+  },
+  warehouses: {
+    label: 'Depósitos',
+    headers: ['name'],
+    sample: ['Depósito Central'],
+    endpoint: '/warehouses',
+    buildPayload: (row) => ({ business_unit_id: state.selectedBU, name: row.name }),
+  },
+  suppliers: {
+    label: 'Proveedores',
+    headers: ['name', 'tax_id', 'phone', 'email', 'address'],
+    sample: ['Proveedor SA', '30-12345678-9', '11-5555-5555', 'contacto@proveedor.com', 'Calle Falsa 123'],
+    endpoint: '/suppliers',
+    buildPayload: (row) => ({ name: row.name, tax_id: row.tax_id || '', phone: row.phone || '', email: row.email || '', address: row.address || '' }),
+  },
+  customers: {
+    label: 'Clientes',
+    headers: ['name', 'tax_id', 'phone', 'email', 'address'],
+    sample: ['Cliente SRL', '30-98765432-1', '11-4444-4444', 'contacto@cliente.com', 'Av. Siempreviva 742'],
+    endpoint: '/customers',
+    buildPayload: (row) => ({ name: row.name, tax_id: row.tax_id || '', phone: row.phone || '', email: row.email || '', address: row.address || '' }),
+  },
+};
+
+function downloadImportTemplate(kind) {
+  const tpl = IMPORT_TEMPLATES[kind];
+  const ws = XLSX.utils.aoa_to_sheet([tpl.headers, tpl.sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, tpl.label.substring(0, 30));
+  XLSX.writeFile(wb, `plantilla_${kind}.xlsx`);
+}
+
+function triggerImport(kind) {
+  const input = document.getElementById('excelFileInput');
+  input.value = '';
+  input.onchange = () => handleImportFile(kind, input.files[0]);
+  input.click();
+}
+
+async function handleImportFile(kind, file) {
+  if (!file) return;
+  const tpl = IMPORT_TEMPLATES[kind];
+  try {
+    const data = await file.arrayBuffer();
+    const wb = XLSX.read(data);
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (!rows.length) { toast('El archivo no tiene filas para importar.', 'error'); return; }
+
+    let ok = 0, failed = 0;
+    const errors = [];
+    for (const row of rows) {
+      const normalized = {};
+      Object.keys(row).forEach(k => { normalized[k.trim().toLowerCase()] = row[k]; });
+      try {
+        await api(tpl.endpoint, { method: 'POST', body: JSON.stringify(tpl.buildPayload(normalized)) });
+        ok++;
+      } catch (e) {
+        failed++;
+        errors.push(`${normalized.name || normalized.code || '(fila sin nombre)'}: ${e.message}`);
+      }
+    }
+    await loadMasterData();
+    renderView();
+    if (failed === 0) {
+      toast(`Importación completa: ${ok} registros creados.`);
+    } else {
+      toast(`Importado: ${ok} — Con errores: ${failed}. Revisá nombres/códigos duplicados.`, 'error');
+      console.warn('Errores de importación:', errors);
+    }
+  } catch (e) {
+    toast('No se pudo leer el archivo. Verificá que sea un Excel válido.', 'error');
+  }
 }
 
 function selectCashBoxFilter(id) {
