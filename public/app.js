@@ -523,14 +523,14 @@ async function renderArticles() {
   const withIva = document.getElementById('ivaToggle')?.checked;
   el.innerHTML = `
     <div class="card">
-      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Moneda', 'Costo lista', `Precio ${withIva ? 'c/IVA' : 's/IVA'}`, 'Obs.', ''], (a) => `
+      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Costo lista', `Precio ARS ${withIva ? '(c/IVA)' : '(s/IVA)'}`, `Precio USD ${withIva ? '(c/IVA)' : '(s/IVA)'}`, 'Obs.', ''], (a) => `
         <tr>
           <td class="mono">${a.code}</td>
           <td class="mono">${a.alt_code || '-'}</td>
           <td>${a.description}</td>
-          <td class="mono">${a.currency}</td>
           <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
-          <td class="num income">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(withIva ? a.final_price_with_iva : a.final_price)}</td>
+          <td class="num income">${articlePriceDisplay(a, 'ARS', withIva)}</td>
+          <td class="num income">${articlePriceDisplay(a, 'USD', withIva)}</td>
           <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
           <td>
             <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
@@ -539,6 +539,22 @@ async function renderArticles() {
         </tr>`, 'No hay artículos cargados en esta unidad.')}
     </div>
   `;
+}
+
+function articlePriceFor(a, targetCurrency, withIva) {
+  const manual = targetCurrency === 'USD' ? a.price_usd : a.price_ars;
+  if (manual != null) {
+    return withIva ? manual * (1 + Number(a.iva_pct) / 100) : Number(manual);
+  }
+  if (a.currency === targetCurrency) {
+    return withIva ? Number(a.final_price_with_iva) : Number(a.final_price);
+  }
+  return null;
+}
+function articlePriceDisplay(a, targetCurrency, withIva) {
+  const price = articlePriceFor(a, targetCurrency, withIva);
+  const sym = targetCurrency === 'USD' ? 'US$' : '$';
+  return price != null ? `${sym} ${fmtMoney(price)}` : '<span style="color:var(--muted)">—</span>';
 }
 
 async function deleteArticle(id, code) {
@@ -579,6 +595,12 @@ function articleFormHtml(a) {
       <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" value="${a?.iva_pct ?? ''}" oninput="updatePricePreview()"></div>
     </div>
     <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${(a?.notes || '').replace(/</g, '&lt;')}</textarea></div>
+
+    <div class="field-row">
+      <div class="field"><label>Precio de venta en ARS (manual)</label><input id="f_price_ars" type="number" step="0.01" placeholder="Dejar vacío para usar el calculado" value="${a?.price_ars ?? ''}"></div>
+      <div class="field"><label>Precio de venta en USD (manual)</label><input id="f_price_usd" type="number" step="0.01" placeholder="Dejar vacío si no aplica" value="${a?.price_usd ?? ''}"></div>
+    </div>
+    <div class="hint" style="margin-bottom:16px">Si cargás un precio manual acá, se usa ese valor directo al vender en esa moneda, en vez del calculado por márgenes.</div>
 
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
       <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
@@ -659,6 +681,8 @@ async function createArticle() {
         profit_margin_pct: Number(document.getElementById('f_profit').value),
         iva_pct: Number(document.getElementById('f_iva').value),
         notes: document.getElementById('f_notes').value,
+        price_ars: document.getElementById('f_price_ars').value ? Number(document.getElementById('f_price_ars').value) : null,
+        price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
       }),
     });
     closeModal(); toast('Artículo creado.'); await loadMasterData(); renderView();
@@ -679,6 +703,8 @@ async function submitEditArticle(id) {
         profit_margin_pct: Number(document.getElementById('f_profit').value),
         iva_pct: Number(document.getElementById('f_iva').value),
         notes: document.getElementById('f_notes').value,
+        price_ars: document.getElementById('f_price_ars').value ? Number(document.getElementById('f_price_ars').value) : null,
+        price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
       }),
     });
     closeModal(); toast('Artículo actualizado.'); await loadMasterData(); renderView();
@@ -1254,7 +1280,15 @@ function selectArticleOption(id, articleId, isPurchase) {
   if (!article) return;
   document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
   document.getElementById(`artid_${id}`).value = articleId;
-  document.getElementById(`price_${id}`).value = Number(isPurchase ? article.list_cost : article.final_price).toFixed(2);
+  let price;
+  if (isPurchase) {
+    price = Number(article.list_cost);
+  } else {
+    const saleCurrency = document.getElementById('f_sale_currency')?.value || 'ARS';
+    price = articlePriceFor(article, saleCurrency, false);
+    if (price == null) price = Number(article.final_price); // sin precio para esa moneda: usar el calculado como referencia
+  }
+  document.getElementById(`price_${id}`).value = price.toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
 }
