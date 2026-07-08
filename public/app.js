@@ -523,7 +523,7 @@ async function renderArticles() {
       <table class="ledger sortable-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
-          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', 'Precio ARS (c/IVA)', 'Precio USD (c/IVA)', 'Obs.', ''].map(h => h
+          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', 'Precio ARS (c/IVA)', 'Precio USD (s/IVA)', 'Obs.', ''].map(h => h
             ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>`
             : `<th></th>`).join('')}
         </tr></thead>
@@ -536,7 +536,7 @@ async function renderArticles() {
               <td>${a.description}</td>
               <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
               <td class="num income">${articlePriceDisplay(a, 'ARS', true)}</td>
-              <td class="num income">${articlePriceDisplay(a, 'USD', true)}</td>
+              <td class="num income">${articlePriceDisplay(a, 'USD', false)}</td>
               <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
               <td>
                 <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
