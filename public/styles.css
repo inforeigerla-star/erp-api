@@ -511,6 +511,41 @@ table.ledger tr:hover td { background: #FAFAFA; }
 }
 .user-box .btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
+/* ---------- CASHBOX PICKER (selección con tarjetas) ---------- */
+.cashbox-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.cashbox-picker-tile {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 10px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  background: #FBFBFA;
+}
+.cashbox-picker-tile:hover { border-color: var(--ink); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.cashbox-picker-tile.selected {
+  border-color: var(--ink);
+  border-width: 2px;
+  background: var(--accent-soft);
+}
+.cashbox-picker-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 4px;
+}
+.cashbox-picker-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 /* ---------- CASH DASHBOARD ---------- */
 .cashbox-grid {
   display: grid;

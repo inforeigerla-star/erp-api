@@ -200,7 +200,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 // Navegación
 // ---------------------------------------------------------
 const viewTitles = {
-  dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
+  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
   customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
 };
@@ -222,6 +222,7 @@ async function renderView() {
   try {
     switch (state.view) {
       case 'dashboard': return renderDashboard();
+      case 'manualmovement': return renderManualMovement();
       case 'stock': return renderStock();
       case 'purchases': return renderPurchases();
       case 'sales': return renderSales();
@@ -1463,23 +1464,48 @@ const tile = (b) => `
       </div>
       <div id="cashMovementsResult"></div>
     </div>
+  `;
+}
 
+async function renderManualMovement() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+  const boxes = state.cache.cashBoxes;
+
+  el.innerHTML = `
     <div class="card">
-      <div class="card-title">Registrar movimiento manual</div>
+      <div class="card-title">1. Elegí la caja o sobre</div>
+      <div class="cashbox-picker-grid" id="manualBoxPicker">
+        ${boxes.map(b => `
+          <div class="cashbox-picker-tile" data-box-id="${b.id}" onclick="selectManualBox(${b.id})">
+            <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
+            <div class="cashbox-picker-name">${b.name}</div>
+            <div class="cashbox-picker-meta">${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="card" id="manualMovementForm" style="display:none">
+      <div class="card-title">2. Datos del movimiento — <span id="selectedBoxLabel"></span></div>
+      <input type="hidden" id="f_mov_box">
       <div class="field-row">
-        <div class="field"><label>Caja o sobre</label>
-          <select id="f_mov_box">${state.cache.cashBoxes.map(b => `<option value="${b.id}">${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'})</option>`).join('')}</select>
-        </div>
         <div class="field"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
+        <div class="field"><label>Monto</label><input id="f_mov_amount" type="number" step="0.01" placeholder="0.00"></div>
       </div>
-      <div class="field-row">
-        <div class="field"><label>Monto</label><input id="f_mov_amount" type="number" step="0.01"></div>
-        <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
-      </div>
+      <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
       <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
       <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
     </div>
   `;
+}
+function selectManualBox(boxId) {
+  const box = state.cache.cashBoxes.find(b => b.id === boxId);
+  if (!box) return;
+  document.querySelectorAll('.cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
+  document.getElementById('f_mov_box').value = boxId;
+  document.getElementById('selectedBoxLabel').textContent = `${box.name} (${box.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${box.currency})`;
+  document.getElementById('manualMovementForm').style.display = 'block';
 }
 
 async function openManualBalanceModal(sessionId, boxName, currentBalance) {
@@ -1763,11 +1789,13 @@ async function deleteCashMovement(id) {
 }
 
 async function createCashMovement() {
+  const boxId = document.getElementById('f_mov_box').value;
+  if (!boxId) { toast('Elegí una caja o sobre primero.', 'error'); return; }
   try {
     await api('/cash-movements', {
       method: 'POST',
       body: JSON.stringify({
-        cash_box_id: Number(document.getElementById('f_mov_box').value),
+        cash_box_id: Number(boxId),
         business_unit_id: state.selectedBU,
         project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
         type: document.getElementById('f_mov_type').value,
