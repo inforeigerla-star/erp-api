@@ -512,22 +512,18 @@ async function deleteStockMovement(id, articleId, name) {
 // ---------------------------------------------------------
 async function renderArticles() {
   document.getElementById('viewActions').innerHTML = `
-    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin-right:8px">
-      <input type="checkbox" id="ivaToggle" onchange="renderArticles()"> Mostrar con IVA
-    </label>
     <button class="btn btn-sm" onclick="downloadImportTemplate('articles')">Plantilla Excel</button>
     <button class="btn btn-sm" onclick="triggerImport('articles')">Importar Excel</button>
     <button class="btn btn-sm btn-danger" id="bulkDeleteArticlesBtn" style="display:none" onclick="bulkDeleteArticles()">Eliminar seleccionados</button>
     <button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
   const el = document.getElementById('view');
   const rows = artByBU();
-  const withIva = document.getElementById('ivaToggle')?.checked;
   el.innerHTML = `
     <div class="card">
       <table class="ledger sortable-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
-          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', `Precio ARS ${withIva ? '(c/IVA)' : '(s/IVA)'}`, `Precio USD ${withIva ? '(c/IVA)' : '(s/IVA)'}`, 'Obs.', ''].map(h => h
+          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', 'Precio ARS (c/IVA)', 'Precio USD (c/IVA)', 'Obs.', ''].map(h => h
             ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>`
             : `<th></th>`).join('')}
         </tr></thead>
@@ -539,8 +535,8 @@ async function renderArticles() {
               <td class="mono">${a.alt_code || '-'}</td>
               <td>${a.description}</td>
               <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
-              <td class="num income">${articlePriceDisplay(a, 'ARS', withIva)}</td>
-              <td class="num income">${articlePriceDisplay(a, 'USD', withIva)}</td>
+              <td class="num income">${articlePriceDisplay(a, 'ARS', true)}</td>
+              <td class="num income">${articlePriceDisplay(a, 'USD', true)}</td>
               <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
               <td>
                 <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
@@ -616,13 +612,14 @@ function articleFormHtml(a) {
     <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${escAttr(a?.description)}"></div>
     <div class="field-row">
       <div class="field"><label>Moneda</label>
-        <select id="f_currency" oninput="updatePricePreview()">
+        <select id="f_currency" onchange="onCurrencyChanged()">
           <option value="ARS" ${a?.currency === 'ARS' || !a ? 'selected' : ''}>Pesos argentinos (ARS)</option>
           <option value="USD" ${a?.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
         </select>
       </div>
       <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" value="${a?.list_cost ?? ''}" oninput="updatePricePreview()"></div>
     </div>
+    <div class="hint" style="margin-top:-10px;margin-bottom:14px">Cambiar la moneda NO convierte el número: solo indica en qué moneda está el costo de lista. Si cambiás de moneda, volvé a escribir el costo correcto en la moneda nueva.</div>
     <div class="field-row">
       <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" value="${a?.shipping_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
       <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" value="${a?.fx_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
@@ -681,6 +678,14 @@ function openEditArticleModal(articleId) {
   updatePricePreview();
 }
 
+function onCurrencyChanged() {
+  const costField = document.getElementById('f_cost');
+  if (Number(costField.value) > 0) {
+    const clear = confirm('El costo de lista actual está en la moneda anterior. ¿Querés borrarlo para volver a escribirlo en la nueva moneda?');
+    if (clear) costField.value = '';
+  }
+  updatePricePreview();
+}
 function updatePricePreview() {
   const cost = Number(document.getElementById('f_cost').value) || 0;
   const ship = Number(document.getElementById('f_ship').value) || 0;
