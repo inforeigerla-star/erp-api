@@ -612,14 +612,13 @@ function articleFormHtml(a) {
     <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${escAttr(a?.description)}"></div>
     <div class="field-row">
       <div class="field"><label>Moneda</label>
-        <select id="f_currency" onchange="onCurrencyChanged()">
+        <select id="f_currency" oninput="updatePricePreview()">
           <option value="ARS" ${a?.currency === 'ARS' || !a ? 'selected' : ''}>Pesos argentinos (ARS)</option>
           <option value="USD" ${a?.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
         </select>
       </div>
       <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" value="${a?.list_cost ?? ''}" oninput="updatePricePreview()"></div>
     </div>
-    <div class="hint" style="margin-top:-10px;margin-bottom:14px">Cambiar la moneda NO convierte el número: solo indica en qué moneda está el costo de lista. Si cambiás de moneda, volvé a escribir el costo correcto en la moneda nueva.</div>
     <div class="field-row">
       <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" value="${a?.shipping_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
       <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" value="${a?.fx_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
