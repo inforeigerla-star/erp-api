@@ -606,10 +606,57 @@ async function renderWarehouses() {
     <button class="btn btn-primary" onclick="newWarehouseModal()">+ Nuevo depósito</button>`;
   const el = document.getElementById('view');
   const rows = whByBU();
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Estado', ''], (w) => `
-    <tr><td>${w.name}</td><td>${w.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('warehouses', ${w.id}, '${w.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
-    'No hay depósitos en esta unidad.')}</div>`;
+  const stock = await api('/stock');
+  const countByWarehouse = {};
+  stock.forEach(s => {
+    if (!countByWarehouse[s.warehouse_id]) countByWarehouse[s.warehouse_id] = { articles: 0, units: 0 };
+    countByWarehouse[s.warehouse_id].articles++;
+    countByWarehouse[s.warehouse_id].units += Number(s.quantity);
+  });
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Estado', 'Artículos distintos', 'Unidades totales', ''], (w) => `
+    <tr>
+      <td>${w.name}</td>
+      <td>${w.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
+      <td class="num">${countByWarehouse[w.id]?.articles || 0}</td>
+      <td class="num">${fmtQty(countByWarehouse[w.id]?.units || 0)}</td>
+      <td>
+        <button class="btn btn-sm" onclick="showWarehouseDetail(${w.id}, '${w.name.replace(/'/g, "\\'")}')">Ver detalle</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteEntity('warehouses', ${w.id}, '${w.name.replace(/'/g, "\\'")}')">Eliminar</button>
+      </td>
+    </tr>`, 'No hay depósitos en esta unidad.')}</div>`;
+}
+
+async function showWarehouseDetail(warehouseId, name) {
+  const stock = await api('/stock');
+  const rows = stock.filter(s => s.warehouse_id === warehouseId);
+  openModal(`
+    <h2>Depósito — ${name}</h2>
+    ${tableOrEmpty(rows, ['Código', 'Artículo', 'Cantidad', ''], (s) => `
+      <tr>
+        <td class="mono">${s.code}</td>
+        <td>${s.description}</td>
+        <td class="num" id="wh_qty_${s.article_id}">${fmtQty(s.quantity)}</td>
+        <td><button class="btn btn-sm" onclick="editWarehouseStock(${warehouseId}, ${s.article_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity}, '${name.replace(/'/g, "\\'")}')">Editar</button></td>
+      </tr>`, 'Este depósito no tiene artículos con stock todavía.')}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
+
+async function editWarehouseStock(warehouseId, articleId, name, currentQty, warehouseName) {
+  const input = prompt(`Nueva cantidad de "${name}" en "${warehouseName}" (actual: ${fmtQty(currentQty)}):`, currentQty);
+  if (input === null) return;
+  const qty = Number(input);
+  if (isNaN(qty) || qty < 0) { toast('Ingresá un número válido (0 o mayor).', 'error'); return; }
+  if (!(await verifyPasswordPrompt('editar stock manualmente'))) return;
+  try {
+    await api('/stock/set', {
+      method: 'PUT',
+      body: JSON.stringify({ warehouse_id: warehouseId, article_id: articleId, quantity: qty }),
+    });
+    toast('Stock actualizado.');
+    await showWarehouseDetail(warehouseId, warehouseName);
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 function newWarehouseModal() {
   openModal(`

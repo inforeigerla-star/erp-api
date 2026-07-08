@@ -780,6 +780,42 @@ app.delete('/stock/:id', async (req, res) => {
   }
 });
 
+app.put('/stock/set', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { article_id, warehouse_id, quantity } = req.body;
+    if (quantity == null || Number(quantity) < 0) throw new Error('La cantidad debe ser un número mayor o igual a cero.');
+    const newQty = Number(quantity);
+
+    await client.query('BEGIN');
+    const current = await client.query(
+      'SELECT quantity FROM stock WHERE warehouse_id=$1 AND article_id=$2 FOR UPDATE',
+      [warehouse_id, article_id]
+    );
+    const currentQty = Number(current.rows[0]?.quantity || 0);
+    const delta = newQty - currentQty;
+
+    await client.query(
+      `INSERT INTO stock (warehouse_id, article_id, quantity) VALUES ($1,$2,$3)
+       ON CONFLICT (warehouse_id, article_id) DO UPDATE SET quantity = $3`,
+      [warehouse_id, article_id, newQty]
+    );
+    if (delta !== 0) {
+      await client.query(
+        `INSERT INTO stock_movement (warehouse_id, article_id, type, quantity, origin_type) VALUES ($1,$2,$3,$4,'ADJUSTMENT')`,
+        [warehouse_id, article_id, delta > 0 ? 'IN' : 'OUT', Math.abs(delta)]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, quantity: newQty });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/stock/transfer', async (req, res) => {
   const client = await pool.connect();
   try {
