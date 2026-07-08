@@ -483,7 +483,7 @@ async function renderArticles() {
   const withIva = document.getElementById('ivaToggle')?.checked;
   el.innerHTML = `
     <div class="card">
-      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Moneda', 'Costo lista', `Precio ${withIva ? 'c/IVA' : 's/IVA'}`, ''], (a) => `
+      ${tableOrEmpty(rows, ['Código', 'Cód. alt.', 'Descripción', 'Moneda', 'Costo lista', `Precio ${withIva ? 'c/IVA' : 's/IVA'}`, 'Obs.', ''], (a) => `
         <tr>
           <td class="mono">${a.code}</td>
           <td class="mono">${a.alt_code || '-'}</td>
@@ -491,7 +491,11 @@ async function renderArticles() {
           <td class="mono">${a.currency}</td>
           <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
           <td class="num income">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(withIva ? a.final_price_with_iva : a.final_price)}</td>
-          <td><button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button></td>
+          <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
+          <td>
+            <button class="btn btn-sm" onclick='openEditArticleModal(${JSON.stringify(a)})'>Editar</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
+          </td>
         </tr>`, 'No hay artículos cargados en esta unidad.')}
     </div>
   `;
@@ -506,31 +510,32 @@ async function deleteArticle(id, code) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function newArticleModal() {
-  openModal(`
-    <h2>Nuevo artículo</h2>
+function articleFormHtml(a) {
+  const isEdit = !!a;
+  return `
     <div class="field-row">
-      <div class="field"><label>Código</label><input id="f_code" placeholder="ART001"></div>
-      <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional"></div>
+      <div class="field"><label>Código</label><input id="f_code" placeholder="ART001" value="${a?.code || ''}"></div>
+      <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional" value="${a?.alt_code || ''}"></div>
     </div>
-    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto"></div>
+    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${a?.description || ''}"></div>
     <div class="field-row">
       <div class="field"><label>Moneda</label>
         <select id="f_currency" oninput="updatePricePreview()">
-          <option value="ARS">Pesos argentinos (ARS)</option>
-          <option value="USD">Dólares (USD)</option>
+          <option value="ARS" ${a?.currency === 'ARS' || !a ? 'selected' : ''}>Pesos argentinos (ARS)</option>
+          <option value="USD" ${a?.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
         </select>
       </div>
-      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" value="${a?.list_cost ?? ''}" oninput="updatePricePreview()"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
-      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" value="${a?.shipping_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" value="${a?.fx_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0" oninput="updatePricePreview()"></div>
-      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0" value="${a?.profit_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
+      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" value="${a?.iva_pct ?? ''}" oninput="updatePricePreview()"></div>
     </div>
+    <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${a?.notes || ''}</textarea></div>
 
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
       <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
@@ -545,10 +550,28 @@ function newArticleModal() {
         </tbody>
       </table>
     </div>
+  `;
+}
 
+function newArticleModal() {
+  openModal(`
+    <h2>Nuevo artículo</h2>
+    ${articleFormHtml(null)}
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="createArticle()">Guardar</button>
+    </div>
+  `);
+  updatePricePreview();
+}
+
+function openEditArticleModal(a) {
+  openModal(`
+    <h2>Editar artículo</h2>
+    ${articleFormHtml(a)}
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditArticle(${a.article_id})">Guardar</button>
     </div>
   `);
   updatePricePreview();
@@ -590,9 +613,30 @@ async function createArticle() {
         fx_margin_pct: Number(document.getElementById('f_fx').value),
         profit_margin_pct: Number(document.getElementById('f_profit').value),
         iva_pct: Number(document.getElementById('f_iva').value),
+        notes: document.getElementById('f_notes').value,
       }),
     });
     closeModal(); toast('Artículo creado.'); await loadMasterData(); renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function submitEditArticle(id) {
+  try {
+    await api(`/articles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        code: document.getElementById('f_code').value,
+        alt_code: document.getElementById('f_altcode').value,
+        description: document.getElementById('f_desc').value,
+        list_cost: Number(document.getElementById('f_cost').value),
+        currency: document.getElementById('f_currency').value,
+        shipping_margin_pct: Number(document.getElementById('f_ship').value),
+        fx_margin_pct: Number(document.getElementById('f_fx').value),
+        profit_margin_pct: Number(document.getElementById('f_profit').value),
+        iva_pct: Number(document.getElementById('f_iva').value),
+        notes: document.getElementById('f_notes').value,
+      }),
+    });
+    closeModal(); toast('Artículo actualizado.'); await loadMasterData(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -824,7 +868,10 @@ async function renderSales() {
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
           <td>${collectionBadge(s.collection_status)}</td>
-          <td>${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : '-'}</td>
+          <td>
+            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            ${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : ''}
+          </td>
         </tr>`, '')}
     </div>` : ''}
 
@@ -839,7 +886,10 @@ async function renderSales() {
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
           <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
-          <td>${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button></td>
+          <td>
+            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
+          </td>
         </tr>`, 'No hay ventas registradas en esta unidad.')}
     </div>
   `;
@@ -990,11 +1040,30 @@ async function renderDebtors() {
           <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
           <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
           <td>${collectionBadge(s.collection_status)}</td>
-          <td>${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : '-'}</td>
+          <td>
+            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            ${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : ''}
+          </td>
         </tr>`, 'No hay facturas pendientes de cobro en esta unidad.')}
     </div>
   `;
 }
+async function showSaleDetail(saleId) {
+  const items = await api(`/sales/${saleId}/items`);
+  openModal(`
+    <h2>Detalle — Venta #${saleId}</h2>
+    ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad', 'Precio unit.', 'Subtotal'], (i) => `
+      <tr>
+        <td class="mono">${i.code}</td>
+        <td>${i.description}</td>
+        <td class="num">${fmtQty(i.quantity)}</td>
+        <td class="num">$ ${fmtMoney(i.unit_price)}</td>
+        <td class="num income">$ ${fmtMoney(i.subtotal)}</td>
+      </tr>`, 'Sin artículos registrados en esta venta.')}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
+
 function customerName(id) {
   return state.cache.customers.find(c => c.id === id)?.name || `Cliente #${id}`;
 }
