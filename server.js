@@ -41,7 +41,7 @@ app.post('/auth/login', async (req, res) => {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions: user.permissions } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -49,6 +49,26 @@ app.post('/auth/login', async (req, res) => {
 
 // A partir de acá, todo requiere estar logueado
 app.use(authRequired);
+
+// ---------- REGISTRO DE ACTIVIDAD (automático en acciones que modifican datos) ----------
+app.use((req, res, next) => {
+  if (req.method !== 'GET') {
+    const summarize = (body) => {
+      if (!body || typeof body !== 'object') return '';
+      const parts = [];
+      if (body.name) parts.push(body.name);
+      if (body.code) parts.push(body.code);
+      if (body.username) parts.push(body.username);
+      if (body.description) parts.push(body.description);
+      return parts.join(' · ').substring(0, 150);
+    };
+    pool.query(
+      `INSERT INTO activity_log (user_id, username, method, path, summary) VALUES ($1,$2,$3,$4,$5)`,
+      [req.user?.id || null, req.user?.username || 'desconocido', req.method, req.originalUrl, summarize(req.body)]
+    ).catch(() => {});
+  }
+  next();
+});
 
 app.post('/auth/verify-password', async (req, res) => {
   try {
@@ -62,32 +82,73 @@ app.post('/auth/verify-password', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.get('/auth/me', async (req, res) => {
+  const r = await pool.query('SELECT id, username, role, permissions FROM app_user WHERE id=$1', [req.user.id]);
+  res.json(r.rows[0]);
+});
+
 app.get('/users', adminRequired, async (req, res) => {
-  const r = await pool.query('SELECT id, username, role, active, created_at FROM app_user ORDER BY id');
+  const r = await pool.query('SELECT id, username, role, permissions, active, created_at FROM app_user ORDER BY id');
   res.json(r.rows);
 });
 app.post('/users', adminRequired, async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, role, permissions } = req.body;
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      'INSERT INTO app_user (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id, username, role, active, created_at',
-      [username, hash, role || 'USER']
+      'INSERT INTO app_user (username, password_hash, role, permissions) VALUES ($1,$2,$3,$4) RETURNING id, username, role, permissions, active, created_at',
+      [username, hash, role || 'USER', JSON.stringify(permissions || ['dashboard'])]
     );
     res.json(r.rows[0]);
   } catch (e) {
     res.status(400).json({ error: e.code === '23505' ? 'Ese nombre de usuario ya existe' : e.message });
   }
 });
+app.put('/users/:id', adminRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, password, role } = req.body;
+    const fields = [];
+    const values = [];
+    let i = 1;
+    if (username) { fields.push(`username=$${i++}`); values.push(username); }
+    if (role) { fields.push(`role=$${i++}`); values.push(role); }
+    if (password) { fields.push(`password_hash=$${i++}`); values.push(await bcrypt.hash(password, 10)); }
+    if (!fields.length) return res.status(400).json({ error: 'Nada para actualizar' });
+    values.push(id);
+    const r = await pool.query(
+      `UPDATE app_user SET ${fields.join(', ')} WHERE id=$${i} RETURNING id, username, role, permissions, active`,
+      values
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.code === '23505' ? 'Ese nombre de usuario ya existe' : e.message });
+  }
+});
+
+app.put('/users/:id/permissions', adminRequired, async (req, res) => {
+  const { id } = req.params;
+  const { permissions } = req.body;
+  const r = await pool.query(
+    'UPDATE app_user SET permissions=$1 WHERE id=$2 RETURNING id, username, role, permissions, active',
+    [JSON.stringify(permissions || []), id]
+  );
+  res.json(r.rows[0]);
+});
 app.put('/users/:id/toggle', adminRequired, async (req, res) => {
   const { id } = req.params;
-  const r = await pool.query('UPDATE app_user SET active = NOT active WHERE id=$1 RETURNING id, username, role, active', [id]);
+  const r = await pool.query('UPDATE app_user SET active = NOT active WHERE id=$1 RETURNING id, username, role, permissions, active', [id]);
   res.json(r.rows[0]);
 });
 app.delete('/users/:id', adminRequired, async (req, res) => {
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'No podés eliminar tu propio usuario' });
   await pool.query('DELETE FROM app_user WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
+});
+
+app.get('/activity-log', adminRequired, async (req, res) => {
+  const r = await pool.query('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 300');
+  res.json(r.rows);
 });
 
 // ---------- BUSINESS UNITS ----------

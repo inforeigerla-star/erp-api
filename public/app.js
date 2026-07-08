@@ -1438,21 +1438,129 @@ async function createCashMovement() {
 // ---------------------------------------------------------
 // USUARIOS (solo admin)
 // ---------------------------------------------------------
+const PERMISSION_OPTIONS = [
+  { key: 'dashboard', label: 'Panel' },
+  { key: 'stock', label: 'Stock' },
+  { key: 'cash', label: 'Caja' },
+  { key: 'purchases', label: 'Compras' },
+  { key: 'sales', label: 'Ventas' },
+  { key: 'debtors', label: 'Deudores' },
+  { key: 'articles', label: 'Artículos' },
+  { key: 'warehouses', label: 'Depósitos' },
+  { key: 'suppliers', label: 'Proveedores' },
+  { key: 'customers', label: 'Clientes' },
+  { key: 'projects', label: 'Proyectos' },
+];
+
+let usersSubTab = 'list';
+
 async function renderUsers() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newUserModal()">+ Nuevo usuario</button>`;
+  document.getElementById('viewActions').innerHTML = usersSubTab === 'list'
+    ? `<button class="btn btn-primary" onclick="newUserModal()">+ Nuevo usuario</button>`
+    : '';
   const el = document.getElementById('view');
+
+  const tabsHtml = `
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      <button class="btn btn-sm ${usersSubTab === 'list' ? 'btn-primary' : ''}" onclick="switchUsersTab('list')">Usuarios</button>
+      <button class="btn btn-sm ${usersSubTab === 'log' ? 'btn-primary' : ''}" onclick="switchUsersTab('log')">Registro de actividad</button>
+    </div>`;
+
+  if (usersSubTab === 'log') {
+    const logs = await api('/activity-log');
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Últimas 300 acciones registradas</div>
+        ${tableOrEmpty(logs, ['Fecha', 'Usuario', 'Acción', 'Ruta', 'Detalle'], (l) => `
+          <tr>
+            <td class="mono">${fmtDate(l.created_at)}</td>
+            <td>${l.username}</td>
+            <td class="mono">${l.method}</td>
+            <td class="mono">${l.path}</td>
+            <td>${l.summary || '-'}</td>
+          </tr>`, 'Sin actividad registrada todavía.')}
+      </div>`;
+    return;
+  }
+
   const rows = await api('/users');
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Usuario', 'Rol', 'Estado', ''], (u) => `
+  el.innerHTML = tabsHtml + `<div class="card">${tableOrEmpty(rows, ['Usuario', 'Rol', 'Estado', ''], (u) => `
     <tr>
       <td>${u.username}</td>
       <td class="mono">${u.role}</td>
       <td>${u.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
       <td>
+        <button class="btn btn-sm" onclick='openEditUserModal(${u.id}, "${u.username}", "${u.role}")'>Editar</button>
+        ${u.role !== 'ADMIN' ? `<button class="btn btn-sm" onclick='openPermissionsModal(${u.id}, "${u.username}", ${JSON.stringify(u.permissions)})'>Permisos</button>` : ''}
         <button class="btn btn-sm" onclick="toggleUser(${u.id})">${u.active ? 'Desactivar' : 'Activar'}</button>
         <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.username}')">Eliminar</button>
       </td>
     </tr>`, 'No hay usuarios cargados.')}</div>`;
 }
+function switchUsersTab(tab) {
+  usersSubTab = tab;
+  renderView();
+}
+
+function openEditUserModal(id, username, role) {
+  openModal(`
+    <h2>Editar usuario</h2>
+    <div class="field"><label>Nombre de usuario</label><input id="f_edit_username" value="${username}"></div>
+    <div class="field"><label>Rol</label>
+      <select id="f_edit_role">
+        <option value="USER" ${role === 'USER' ? 'selected' : ''}>Usuario</option>
+        <option value="ADMIN" ${role === 'ADMIN' ? 'selected' : ''}>Administrador</option>
+      </select>
+    </div>
+    <div class="field"><label>Nueva contraseña (dejar vacío para no cambiarla)</label><input id="f_edit_password" type="password" placeholder="••••••••"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditUser(${id})">Guardar</button>
+    </div>
+  `);
+}
+async function submitEditUser(id) {
+  const payload = {
+    username: document.getElementById('f_edit_username').value,
+    role: document.getElementById('f_edit_role').value,
+  };
+  const newPass = document.getElementById('f_edit_password').value;
+  if (newPass) payload.password = newPass;
+  try {
+    await api(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    closeModal();
+    toast('Usuario actualizado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function openPermissionsModal(userId, username, currentPermissions) {
+  openModal(`
+    <h2>Permisos — ${username}</h2>
+    <div class="hint" style="margin-bottom:14px">Elegí a qué solapas puede acceder este usuario.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:16px">
+      ${PERMISSION_OPTIONS.map(p => `
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+          <input type="checkbox" class="perm-check" value="${p.key}" ${currentPermissions.includes(p.key) ? 'checked' : ''}>
+          ${p.label}
+        </label>`).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitPermissions(${userId})">Guardar</button>
+    </div>
+  `);
+}
+async function submitPermissions(userId) {
+  const checked = [...document.querySelectorAll('.perm-check:checked')].map(c => c.value);
+  try {
+    await api(`/users/${userId}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: checked }) });
+    closeModal();
+    toast('Permisos actualizados.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function newUserModal() {
   openModal(`
     <h2>Nuevo usuario</h2>
@@ -1464,6 +1572,15 @@ function newUserModal() {
         <option value="ADMIN">Administrador</option>
       </select>
     </div>
+    <div class="field"><label>Permisos iniciales</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">
+        ${PERMISSION_OPTIONS.map(p => `
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px">
+            <input type="checkbox" class="new-perm-check" value="${p.key}" checked>
+            ${p.label}
+          </label>`).join('')}
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="createUser()">Guardar</button>
@@ -1471,6 +1588,7 @@ function newUserModal() {
   `);
 }
 async function createUser() {
+  const permissions = [...document.querySelectorAll('.new-perm-check:checked')].map(c => c.value);
   try {
     await api('/users', {
       method: 'POST',
@@ -1478,6 +1596,7 @@ async function createUser() {
         username: document.getElementById('f_username').value,
         password: document.getElementById('f_password').value,
         role: document.getElementById('f_role').value,
+        permissions,
       }),
     });
     closeModal(); toast('Usuario creado.'); renderView();
@@ -1499,21 +1618,41 @@ async function boot() {
   document.getElementById('appShell').style.display = 'flex';
   document.getElementById('currentUserLabel').textContent = `${state.currentUser.username} (${state.currentUser.role === 'ADMIN' ? 'Admin' : 'Usuario'})`;
   document.getElementById('adminNavGroup').style.display = state.currentUser.role === 'ADMIN' ? 'flex' : 'none';
+  applyNavPermissions();
   await checkConnection();
   await loadBusinessUnits();
   await loadMasterData();
   renderView();
 }
 
+function applyNavPermissions() {
+  if (state.currentUser.role === 'ADMIN') return; // admin ve todo
+  const allowed = state.currentUser.permissions || [];
+  document.querySelectorAll('.nav-item[data-view]').forEach(btn => {
+    const view = btn.dataset.view;
+    if (view !== 'users' && !allowed.includes(view)) {
+      btn.style.display = 'none';
+    }
+  });
+  // Si la vista activa por defecto no está permitida, saltar a la primera permitida
+  if (!allowed.includes(state.view)) {
+    const firstAllowed = allowed[0] || 'dashboard';
+    state.view = firstAllowed;
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === firstAllowed));
+  }
+}
+
 document.getElementById('loginPass')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('loginUser')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
-(function init() {
+(async function init() {
   const token = getToken();
   if (!token) return; // se queda en la pantalla de login
   try {
     const payload = JSON.parse(atob(token.split('.')[1]));
-    state.currentUser = { id: payload.id, username: payload.username, role: payload.role };
+    state.currentUser = { id: payload.id, username: payload.username, role: payload.role, permissions: [] };
+    const me = await api('/auth/me');
+    state.currentUser.permissions = me.permissions || [];
     boot();
   } catch (e) {
     clearToken();
