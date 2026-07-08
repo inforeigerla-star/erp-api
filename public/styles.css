@@ -166,7 +166,7 @@ button, input, select { font-family: inherit; font-size: inherit; }
 .conn-status.err .dot { background: #A33; box-shadow: 0 0 0 3px rgba(170,51,51,0.2); }
 
 /* ---------- MAIN ---------- */
-.main { flex: 1; padding: 36px 44px 70px 44px; max-width: 1220px; }
+.main { flex: 1; padding: 36px 44px 70px 44px; max-width: none; width: 100%; }
 
 .topbar {
   display: flex;
