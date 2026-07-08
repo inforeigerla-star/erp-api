@@ -131,7 +131,22 @@ async function loadBusinessUnits() {
   sel.innerHTML = state.businessUnits.map(bu => `<option value="${bu.id}">${bu.name}</option>`).join('');
   state.selectedBU = state.selectedBU && state.businessUnits.some(b => b.id === state.selectedBU) ? state.selectedBU : (state.businessUnits[0]?.id || null);
   sel.value = state.selectedBU;
-  sel.onchange = () => { state.selectedBU = Number(sel.value); renderView(); };
+  sel.onchange = () => { state.selectedBU = Number(sel.value); applyBUTheme(); renderView(); };
+  applyBUTheme();
+}
+
+const BU_THEME = {
+  reiger: { logo: 'assets/icons/reiger.png', accent: '#B9006E' },
+  endless: { logo: 'assets/icons/endless.png', accent: '#F5D800' },
+  sadev: { logo: 'assets/icons/sadev.png', accent: '#3E7CD6' },
+  peugeot: { logo: 'assets/icons/peugeot.png', accent: '#8A8A8A' },
+};
+function applyBUTheme() {
+  const bu = state.businessUnits.find(b => b.id === state.selectedBU);
+  const key = Object.keys(BU_THEME).find(k => (bu?.name || '').toLowerCase().includes(k));
+  const theme = BU_THEME[key] || { logo: 'assets/logo.jpg', accent: '#2F6F4E' };
+  document.getElementById('brandLogo').src = theme.logo;
+  document.documentElement.style.setProperty('--bu-accent', theme.accent);
 }
 
 function newBusinessUnitModal() {
