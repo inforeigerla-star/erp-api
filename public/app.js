@@ -316,9 +316,14 @@ function sortTableByColumn(th) {
   const colIndex = ths.indexOf(th);
   const currentDir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
 
-  ths.forEach(t => { t.dataset.dir = ''; t.querySelector('.sort-indicator').textContent = ''; });
+  ths.forEach(t => {
+    t.dataset.dir = '';
+    const ind = t.querySelector('.sort-indicator');
+    if (ind) ind.textContent = '';
+  });
   th.dataset.dir = currentDir;
-  th.querySelector('.sort-indicator').textContent = currentDir === 'asc' ? ' ▲' : ' ▼';
+  const thisIndicator = th.querySelector('.sort-indicator');
+  if (thisIndicator) thisIndicator.textContent = currentDir === 'asc' ? ' ▲' : ' ▼';
 
   const rows = [...tbody.querySelectorAll('tr')];
   const parseCell = (tr) => {
