@@ -277,6 +277,13 @@ table.ledger th {
   padding: 10px 12px;
   border-bottom: 1.5px solid var(--ink);
 }
+th.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+th.sortable-th:hover { color: var(--ink); }
+.sort-indicator { font-size: 9px; color: var(--ink); }
 table.ledger td {
   padding: 13px 12px;
   border-bottom: 1px solid var(--border-soft);

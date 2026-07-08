@@ -303,10 +303,41 @@ function statusBadge(status) {
 function tableOrEmpty(rows, headers, rowFn, emptyMsg) {
   if (!rows.length) return `<div class="empty-state">${emptyMsg}</div>`;
   return `
-    <table class="ledger">
-      <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <table class="ledger sortable-table">
+      <thead><tr>${headers.map((h, i) => h ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>` : `<th></th>`).join('')}</tr></thead>
       <tbody>${rows.map(rowFn).join('')}</tbody>
     </table>`;
+}
+
+function sortTableByColumn(th) {
+  const table = th.closest('table');
+  const tbody = table.querySelector('tbody');
+  const ths = [...th.parentElement.children];
+  const colIndex = ths.indexOf(th);
+  const currentDir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+
+  ths.forEach(t => { t.dataset.dir = ''; t.querySelector('.sort-indicator').textContent = ''; });
+  th.dataset.dir = currentDir;
+  th.querySelector('.sort-indicator').textContent = currentDir === 'asc' ? ' ▲' : ' ▼';
+
+  const rows = [...tbody.querySelectorAll('tr')];
+  const parseCell = (tr) => {
+    const cell = tr.children[colIndex];
+    const text = cell ? cell.textContent.trim() : '';
+    const numeric = text.replace(/[^0-9.,\-]/g, '').replace(/\.(?=.*\.)/g, '').replace(',', '.');
+    const num = parseFloat(numeric);
+    return { text: text.toLowerCase(), num: isNaN(num) ? null : num };
+  };
+
+  rows.sort((a, b) => {
+    const pa = parseCell(a), pb = parseCell(b);
+    let cmp;
+    if (pa.num !== null && pb.num !== null) cmp = pa.num - pb.num;
+    else cmp = pa.text.localeCompare(pb.text, 'es');
+    return currentDir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
 }
 
 // ---------------------------------------------------------
@@ -493,7 +524,7 @@ async function renderArticles() {
           <td class="num income">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(withIva ? a.final_price_with_iva : a.final_price)}</td>
           <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
           <td>
-            <button class="btn btn-sm" onclick='openEditArticleModal(${JSON.stringify(a)})'>Editar</button>
+            <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
             <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
           </td>
         </tr>`, 'No hay artículos cargados en esta unidad.')}
@@ -510,14 +541,17 @@ async function deleteArticle(id, code) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+function escAttr(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
 function articleFormHtml(a) {
   const isEdit = !!a;
   return `
     <div class="field-row">
-      <div class="field"><label>Código</label><input id="f_code" placeholder="ART001" value="${a?.code || ''}"></div>
-      <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional" value="${a?.alt_code || ''}"></div>
+      <div class="field"><label>Código</label><input id="f_code" placeholder="ART001" value="${escAttr(a?.code)}"></div>
+      <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional" value="${escAttr(a?.alt_code)}"></div>
     </div>
-    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${a?.description || ''}"></div>
+    <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${escAttr(a?.description)}"></div>
     <div class="field-row">
       <div class="field"><label>Moneda</label>
         <select id="f_currency" oninput="updatePricePreview()">
@@ -535,7 +569,7 @@ function articleFormHtml(a) {
       <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0" value="${a?.profit_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
       <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" value="${a?.iva_pct ?? ''}" oninput="updatePricePreview()"></div>
     </div>
-    <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${a?.notes || ''}</textarea></div>
+    <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${(a?.notes || '').replace(/</g, '&lt;')}</textarea></div>
 
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
       <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
@@ -565,7 +599,9 @@ function newArticleModal() {
   updatePricePreview();
 }
 
-function openEditArticleModal(a) {
+function openEditArticleModal(articleId) {
+  const a = state.cache.articles.find(x => x.article_id === articleId);
+  if (!a) { toast('No se encontró el artículo.', 'error'); return; }
   openModal(`
     <h2>Editar artículo</h2>
     ${articleFormHtml(a)}
