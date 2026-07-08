@@ -144,8 +144,8 @@ button, input, select { font-family: inherit; font-size: inherit; }
 }
 .nav-item:hover { background: rgba(255,255,255,0.06); color: #F6F6F7; }
 .nav-item.active {
-  background: #F6F6F7;
-  color: #0B0B0C;
+  background: var(--bu-accent);
+  color: #fff;
   font-weight: 600;
   box-shadow: var(--shadow-sm);
 }
@@ -203,7 +203,7 @@ button, input, select { font-family: inherit; font-size: inherit; }
   box-shadow: var(--shadow-sm);
 }
 .btn:hover { border-color: #C7C7CC; background: var(--accent-soft); }
-.btn-primary { background: var(--sidebar); border-color: var(--sidebar); color: #fff; }
+.btn-primary { background: var(--bu-accent); border-color: var(--bu-accent); color: #fff; }
 .btn-primary:hover { background: #000; border-color: #000; }
 .btn-danger {
   color: var(--muted);
