@@ -1197,11 +1197,19 @@ function newOperationModal(kind) {
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
     ${!isPurchase ? `
-    <div class="field"><label>Moneda de la venta</label>
-      <select id="f_sale_currency">
-        <option value="ARS">Pesos argentinos (ARS)</option>
-        <option value="USD">Dólares (USD)</option>
-      </select>
+    <div class="field-row">
+      <div class="field"><label>Moneda de la venta</label>
+        <select id="f_sale_currency" onchange="refreshAllLinePrices()">
+          <option value="ARS">Pesos argentinos (ARS)</option>
+          <option value="USD">Dólares (USD)</option>
+        </select>
+      </div>
+      <div class="field"><label>Precios</label>
+        <select id="f_sale_iva" onchange="refreshAllLinePrices()">
+          <option value="no">Sin IVA</option>
+          <option value="si">Con IVA</option>
+        </select>
+      </div>
     </div>` : ''}
     <div class="field"><label>Forma de pago</label>
       <select id="f_payment" onchange="togglePaymentBoxField()">
@@ -1317,17 +1325,27 @@ function selectArticleOption(id, articleId, isPurchase) {
   if (!article) return;
   document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
   document.getElementById(`artid_${id}`).value = articleId;
+  document.getElementById(`line_${id}`).dataset.articleId = articleId;
   let price;
   if (isPurchase) {
     price = Number(article.list_cost);
   } else {
     const saleCurrency = document.getElementById('f_sale_currency')?.value || 'ARS';
-    price = articlePriceFor(article, saleCurrency, false);
-    if (price == null) price = Number(article.final_price); // sin precio para esa moneda: usar el calculado como referencia
+    const withIva = document.getElementById('f_sale_iva')?.value === 'si';
+    price = articlePriceFor(article, saleCurrency, withIva);
+    if (price == null) price = withIva ? Number(article.final_price_with_iva) : Number(article.final_price);
   }
   document.getElementById(`price_${id}`).value = price.toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
+}
+function refreshAllLinePrices() {
+  const rows = [...document.getElementById('lineItems').children];
+  rows.forEach(row => {
+    const id = row.id.replace('line_', '');
+    const articleId = Number(row.dataset.articleId);
+    if (articleId) selectArticleOption(id, articleId, false);
+  });
 }
 
 async function createOperation(kind) {
