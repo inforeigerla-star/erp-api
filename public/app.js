@@ -885,7 +885,7 @@ async function renderSales() {
           <td class="mono">${fmtDate(s.date)}</td>
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
-          <td class="num income">$ ${fmtMoney(s.total_amount)}</td>
+          <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
             <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
             ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
@@ -1077,6 +1077,7 @@ function newOperationModal(kind) {
   const projOptions = `<option value="">Sin proyecto</option>` + projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('');
 
   lineItemCount = 0;
+  totalManuallyEdited = false;
   openModal(`
     <h2>${isPurchase ? 'Nueva compra' : 'Nueva venta'}</h2>
     <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
@@ -1086,6 +1087,13 @@ function newOperationModal(kind) {
       <div class="field"><label>Depósito</label><select id="f_warehouse">${whOptions || '<option value="">— cargá uno primero —</option>'}</select></div>
       <div class="field"><label>Proyecto (opcional)</label><select id="f_project">${projOptions}</select></div>
     </div>
+    ${!isPurchase ? `
+    <div class="field"><label>Moneda de la venta</label>
+      <select id="f_sale_currency">
+        <option value="ARS">Pesos argentinos (ARS)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+    </div>` : ''}
     <div class="field"><label>Forma de pago</label>
       <select id="f_payment" onchange="togglePaymentBoxField()">
         <option value="CASH">Contado</option>
@@ -1103,12 +1111,37 @@ function newOperationModal(kind) {
       <button class="btn btn-sm" onclick="addLineItem('${kind}')">+ Agregar artículo</button>
     </div>
 
+    ${!isPurchase ? `
+    <div class="field">
+      <label>Importe final (editable)</label>
+      <input id="f_total_override" type="number" step="0.01" placeholder="Se calcula solo, pero podés modificarlo" oninput="markTotalAsManual()">
+      <div class="hint" id="totalHint">Se calcula automáticamente a partir de los artículos. Podés cambiarlo manualmente si necesitás ajustarlo.</div>
+    </div>` : ''}
+
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="createOperation('${kind}')">Guardar</button>
     </div>
   `);
   addLineItem(kind);
+}
+let totalManuallyEdited = false;
+function markTotalAsManual() {
+  totalManuallyEdited = true;
+  document.getElementById('totalHint').textContent = 'Importe modificado manualmente. No se recalculará solo.';
+}
+function recalcLineItemsTotal() {
+  if (totalManuallyEdited) return;
+  const rows = [...document.getElementById('lineItems').children];
+  let total = 0;
+  rows.forEach(row => {
+    const idMatch = row.id.replace('line_', '');
+    const qty = Number(document.getElementById(`qty_${idMatch}`)?.value) || 0;
+    const price = Number(document.getElementById(`price_${idMatch}`)?.value) || 0;
+    total += qty * price;
+  });
+  const overrideField = document.getElementById('f_total_override');
+  if (overrideField) overrideField.value = total.toFixed(2);
 }
 
 function togglePaymentBoxField() {
@@ -1130,11 +1163,12 @@ function addLineItem(kind) {
       <input type="hidden" id="artid_${id}">
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
-    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1">
-    <input type="number" step="0.01" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}">
-    <button class="remove-line" onclick="document.getElementById('line_${id}').remove()">×</button>
+    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" oninput="recalcLineItemsTotal()">
+    <input type="number" step="0.01" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" oninput="recalcLineItemsTotal()">
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
   `;
   container.appendChild(row);
+  recalcLineItemsTotal();
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest(`#line_${id}`)) {
@@ -1176,6 +1210,7 @@ function selectArticleOption(id, articleId, isPurchase) {
   document.getElementById(`artid_${id}`).value = articleId;
   document.getElementById(`price_${id}`).value = Number(isPurchase ? article.list_cost : article.final_price).toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
+  recalcLineItemsTotal();
 }
 
 async function createOperation(kind) {
@@ -1201,6 +1236,11 @@ async function createOperation(kind) {
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(document.getElementById('f_contact').value);
+  if (!isPurchase) {
+    payload.currency = document.getElementById('f_sale_currency').value;
+    const overrideVal = document.getElementById('f_total_override').value;
+    if (overrideVal !== '') payload.total_override = Number(overrideVal);
+  }
 
   try {
     await api(`/${kind === 'purchase' ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });

@@ -640,13 +640,13 @@ app.delete('/purchases/:id', async (req, res) => {
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, items } = req.body;
     await client.query('BEGIN');
 
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH']
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS']
     );
     const sale = saleR.rows[0];
 
@@ -656,6 +656,10 @@ app.post('/sales', async (req, res) => {
          VALUES ($1,$2,$3,$4)`,
         [sale.id, item.article_id, item.quantity, item.unit_price]
       );
+    }
+
+    if (total_override != null && total_override !== '') {
+      await client.query('UPDATE sale SET total_amount=$1 WHERE id=$2', [Number(total_override), sale.id]);
     }
 
     await client.query('COMMIT');
