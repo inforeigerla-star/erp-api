@@ -2417,7 +2417,28 @@ async function renderUsers() {
     <div style="display:flex;gap:8px;margin-bottom:18px">
       <button class="btn btn-sm ${usersSubTab === 'list' ? 'btn-primary' : ''}" onclick="switchUsersTab('list')">Usuarios</button>
       <button class="btn btn-sm ${usersSubTab === 'log' ? 'btn-primary' : ''}" onclick="switchUsersTab('log')">Registro de actividad</button>
+      <button class="btn btn-sm ${usersSubTab === 'trash' ? 'btn-primary' : ''}" onclick="switchUsersTab('trash')">Papelera</button>
     </div>`;
+
+  if (usersSubTab === 'trash') {
+    const trash = await api('/trash');
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Elementos eliminados (se borran solos a los 30 días)</div>
+        ${tableOrEmpty(trash, ['Tipo', 'Nombre', 'Eliminado', 'Días restantes', ''], (t) => `
+          <tr>
+            <td class="mono">${t.type_label}</td>
+            <td>${t.name}</td>
+            <td class="mono">${fmtDate(t.deleted_at)}</td>
+            <td class="num ${t.days_remaining <= 5 ? 'expense' : ''}">${t.days_remaining}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="restoreTrashItem('${t.type}', ${t.id})">Restaurar</button>
+              <button class="btn btn-sm btn-danger" onclick="purgeTrashItem('${t.type}', ${t.id}, '${t.name.replace(/'/g, "\\'")}')">Eliminar definitivo</button>
+            </td>
+          </tr>`, 'La papelera está vacía.')}
+      </div>`;
+    return;
+  }
 
   if (usersSubTab === 'log') {
     const logs = await api('/activity-log');
@@ -2453,6 +2474,24 @@ async function renderUsers() {
 function switchUsersTab(tab) {
   usersSubTab = tab;
   renderView();
+}
+async function restoreTrashItem(type, id) {
+  try {
+    await api(`/trash/${type}/${id}/restore`, { method: 'POST' });
+    toast('Elemento restaurado.');
+    await loadMasterData();
+    if (type === 'business-units') await loadBusinessUnits();
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function purgeTrashItem(type, id, name) {
+  if (!confirm(`¿Eliminar "${name}" definitivamente? Ya no se podrá recuperar.`)) return;
+  if (!(await verifyPasswordPrompt('eliminar definitivamente de la papelera'))) return;
+  try {
+    await api(`/trash/${type}/${id}`, { method: 'DELETE' });
+    toast('Eliminado definitivamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function openEditUserModal(id, username, role) {

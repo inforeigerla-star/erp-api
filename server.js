@@ -88,7 +88,7 @@ app.get('/auth/me', async (req, res) => {
 });
 
 app.get('/users', adminRequired, async (req, res) => {
-  const r = await pool.query('SELECT id, username, role, permissions, active, created_at FROM app_user ORDER BY id');
+  const r = await pool.query('SELECT id, username, role, permissions, active, created_at FROM app_user WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.post('/users', adminRequired, async (req, res) => {
@@ -142,8 +142,76 @@ app.put('/users/:id/toggle', adminRequired, async (req, res) => {
 });
 app.delete('/users/:id', adminRequired, async (req, res) => {
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'No podés eliminar tu propio usuario' });
-  await pool.query('DELETE FROM app_user WHERE id=$1', [req.params.id]);
+  await pool.query('UPDATE app_user SET deleted_at=now(), active=false WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
+});
+
+// ---------- PAPELERA (soft-delete, 30 días) ----------
+const TRASH_TABLES = {
+  'business-units': { table: 'business_unit', nameCol: 'name', label: 'Unidad de negocio' },
+  'projects': { table: 'project', nameCol: 'name', label: 'Proyecto' },
+  'suppliers': { table: 'supplier', nameCol: 'name', label: 'Proveedor' },
+  'customers': { table: 'customer', nameCol: 'name', label: 'Cliente' },
+  'warehouses': { table: 'warehouse', nameCol: 'name', label: 'Depósito' },
+  'articles': { table: 'article', nameCol: 'description', label: 'Artículo' },
+  'cash-boxes': { table: 'cash_box', nameCol: 'name', label: 'Caja/Sobre' },
+  'users': { table: 'app_user', nameCol: 'username', label: 'Usuario' },
+};
+
+async function purgeExpiredTrash() {
+  for (const key in TRASH_TABLES) {
+    const { table } = TRASH_TABLES[key];
+    try {
+      await pool.query(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < now() - interval '30 days'`);
+    } catch (e) {
+      console.error(`Error purgando ${table}:`, e.message);
+    }
+  }
+}
+setInterval(purgeExpiredTrash, 1000 * 60 * 60); // cada 1 hora
+
+app.get('/trash', adminRequired, async (req, res) => {
+  await purgeExpiredTrash();
+  const results = [];
+  for (const key in TRASH_TABLES) {
+    const { table, nameCol, label } = TRASH_TABLES[key];
+    const r = await pool.query(
+      `SELECT id, ${nameCol} AS name, deleted_at FROM ${table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+    );
+    r.rows.forEach(row => {
+      const daysElapsed = (Date.now() - new Date(row.deleted_at).getTime()) / (1000 * 60 * 60 * 24);
+      results.push({
+        type: key, type_label: label, id: row.id, name: row.name,
+        deleted_at: row.deleted_at, days_remaining: Math.max(0, Math.ceil(30 - daysElapsed)),
+      });
+    });
+  }
+  results.sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+  res.json(results);
+});
+
+app.post('/trash/:type/:id/restore', adminRequired, async (req, res) => {
+  const { type, id } = req.params;
+  const config = TRASH_TABLES[type];
+  if (!config) return res.status(400).json({ error: 'Tipo inválido.' });
+  try {
+    await pool.query(`UPDATE ${config.table} SET deleted_at=NULL WHERE id=$1`, [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/trash/:type/:id', adminRequired, async (req, res) => {
+  const { type, id } = req.params;
+  const config = TRASH_TABLES[type];
+  if (!config) return res.status(400).json({ error: 'Tipo inválido.' });
+  try {
+    await pool.query(`DELETE FROM ${config.table} WHERE id=$1 AND deleted_at IS NOT NULL`, [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.get('/activity-log', adminRequired, async (req, res) => {
@@ -153,7 +221,7 @@ app.get('/activity-log', adminRequired, async (req, res) => {
 
 // ---------- BUSINESS UNITS ----------
 app.get('/business-units', async (req, res) => {
-  const r = await pool.query('SELECT * FROM business_unit ORDER BY id');
+  const r = await pool.query('SELECT * FROM business_unit WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.post('/business-units', async (req, res) => {
@@ -167,7 +235,7 @@ app.post('/business-units', async (req, res) => {
 });
 app.delete('/business-units/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM business_unit WHERE id=$1', [req.params.id]);
+    await pool.query('UPDATE business_unit SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -184,7 +252,7 @@ app.post('/projects', async (req, res) => {
   res.json(r.rows[0]);
 });
 app.get('/projects', async (req, res) => {
-  const r = await pool.query('SELECT * FROM project ORDER BY id');
+  const r = await pool.query('SELECT * FROM project WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.put('/projects/:id', async (req, res) => {
@@ -198,22 +266,12 @@ app.put('/projects/:id', async (req, res) => {
   }
 });
 app.delete('/projects/:id', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await client.query('BEGIN');
-    await client.query('UPDATE cash_movement SET project_id=NULL WHERE project_id=$1', [id]);
-    await client.query('UPDATE purchase SET project_id=NULL WHERE project_id=$1', [id]);
-    await client.query('UPDATE sale SET project_id=NULL WHERE project_id=$1', [id]);
-    await client.query('UPDATE sale_collection SET project_id=NULL WHERE project_id=$1', [id]);
-    await client.query('DELETE FROM project WHERE id=$1', [id]);
-    await client.query('COMMIT');
+    await pool.query('UPDATE project SET deleted_at=now() WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -227,7 +285,7 @@ app.post('/suppliers', async (req, res) => {
   res.json(r.rows[0]);
 });
 app.get('/suppliers', async (req, res) => {
-  const r = await pool.query('SELECT * FROM supplier ORDER BY id');
+  const r = await pool.query('SELECT * FROM supplier WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.put('/suppliers/:id', async (req, res) => {
@@ -244,26 +302,11 @@ app.put('/suppliers/:id', async (req, res) => {
   }
 });
 app.delete('/suppliers/:id', async (req, res) => {
-  const client = await pool.connect();
   try {
-    const { id } = req.params;
-    await client.query('BEGIN');
-    const purchases = await client.query('SELECT id FROM purchase WHERE supplier_id=$1', [id]);
-    for (const p of purchases.rows) {
-      await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [p.id]);
-      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
-      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
-      await client.query('DELETE FROM purchase WHERE id=$1', [p.id]);
-    }
-    await client.query('DELETE FROM supplier_account_movement WHERE supplier_id=$1', [id]);
-    await client.query('DELETE FROM supplier WHERE id=$1', [id]);
-    await client.query('COMMIT');
+    await pool.query('UPDATE supplier SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -276,7 +319,7 @@ app.post('/customers', async (req, res) => {
   res.json(r.rows[0]);
 });
 app.get('/customers', async (req, res) => {
-  const r = await pool.query('SELECT * FROM customer ORDER BY id');
+  const r = await pool.query('SELECT * FROM customer WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.put('/customers/:id', async (req, res) => {
@@ -293,27 +336,11 @@ app.put('/customers/:id', async (req, res) => {
   }
 });
 app.delete('/customers/:id', async (req, res) => {
-  const client = await pool.connect();
   try {
-    const { id } = req.params;
-    await client.query('BEGIN');
-    const sales = await client.query('SELECT id FROM sale WHERE customer_id=$1', [id]);
-    for (const s of sales.rows) {
-      await client.query('DELETE FROM sale_item WHERE sale_id=$1', [s.id]);
-      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
-      await client.query('DELETE FROM sale_collection WHERE sale_id=$1', [s.id]);
-      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
-      await client.query('DELETE FROM sale WHERE id=$1', [s.id]);
-    }
-    await client.query('DELETE FROM customer_account_movement WHERE customer_id=$1', [id]);
-    await client.query('DELETE FROM customer WHERE id=$1', [id]);
-    await client.query('COMMIT');
+    await pool.query('UPDATE customer SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -327,7 +354,7 @@ app.post('/warehouses', async (req, res) => {
   res.json(r.rows[0]);
 });
 app.get('/warehouses', async (req, res) => {
-  const r = await pool.query('SELECT * FROM warehouse ORDER BY id');
+  const r = await pool.query('SELECT * FROM warehouse WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 app.put('/warehouses/:id', async (req, res) => {
@@ -341,42 +368,11 @@ app.put('/warehouses/:id', async (req, res) => {
   }
 });
 app.delete('/warehouses/:id', async (req, res) => {
-  const client = await pool.connect();
   try {
-    const { id } = req.params;
-    await client.query('BEGIN');
-
-    // Eliminar compras que usaron este depósito (con toda su cascada)
-    const purchases = await client.query('SELECT id FROM purchase WHERE warehouse_id=$1', [id]);
-    for (const p of purchases.rows) {
-      await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [p.id]);
-      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
-      await client.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [p.id]);
-      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', p.id]);
-      await client.query('DELETE FROM purchase WHERE id=$1', [p.id]);
-    }
-    // Eliminar ventas que usaron este depósito (con toda su cascada)
-    const sales = await client.query('SELECT id FROM sale WHERE warehouse_id=$1', [id]);
-    for (const s of sales.rows) {
-      await client.query('DELETE FROM sale_item WHERE sale_id=$1', [s.id]);
-      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
-      await client.query('DELETE FROM customer_account_movement WHERE sale_id=$1', [s.id]);
-      await client.query('DELETE FROM sale_collection WHERE sale_id=$1', [s.id]);
-      await client.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', s.id]);
-      await client.query('DELETE FROM sale WHERE id=$1', [s.id]);
-    }
-
-    await client.query('DELETE FROM stock_movement WHERE warehouse_id=$1', [id]);
-    await client.query('DELETE FROM stock WHERE warehouse_id=$1', [id]);
-    await client.query('DELETE FROM warehouse WHERE id=$1', [id]);
-
-    await client.query('COMMIT');
+    await pool.query('UPDATE warehouse SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -396,28 +392,17 @@ app.get('/articles', async (req, res) => {
 });
 
 app.delete('/articles/:id', async (req, res) => {
-  const client = await pool.connect();
   try {
-    const { id } = req.params;
-    await client.query('BEGIN');
-    await client.query('DELETE FROM purchase_item WHERE article_id=$1', [id]);
-    await client.query('DELETE FROM sale_item WHERE article_id=$1', [id]);
-    await client.query('DELETE FROM stock_movement WHERE article_id=$1', [id]);
-    await client.query('DELETE FROM stock WHERE article_id=$1', [id]);
-    await client.query('DELETE FROM article WHERE id=$1', [id]);
-    await client.query('COMMIT');
+    await pool.query('UPDATE article SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 
 // ---------- CASH BOX / SESSIONS ----------
 app.get('/cash-boxes', async (req, res) => {
-  const r = await pool.query('SELECT * FROM cash_box ORDER BY id');
+  const r = await pool.query('SELECT * FROM cash_box WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
 
@@ -447,11 +432,7 @@ app.post('/cash-boxes', async (req, res) => {
 
 app.delete('/cash-boxes/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    await pool.query('DELETE FROM sale_collection WHERE cash_box_id=$1', [id]);
-    await pool.query('DELETE FROM cash_movement WHERE cash_session_id IN (SELECT id FROM cash_session WHERE cash_box_id=$1)', [id]);
-    await pool.query('DELETE FROM cash_session WHERE cash_box_id=$1', [id]);
-    await pool.query('DELETE FROM cash_box WHERE id=$1', [id]);
+    await pool.query('UPDATE cash_box SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -471,6 +452,7 @@ app.get('/cash-boxes/dashboard', async (req, res) => {
     FROM cash_box cb
     LEFT JOIN cash_session cs ON cs.cash_box_id = cb.id
     LEFT JOIN cash_movement cm ON cm.cash_session_id = cs.id
+    WHERE cb.deleted_at IS NULL
     GROUP BY cb.id, cb.name, cb.currency, cb.kind, cs.id, cs.status, cs.opening_amount
     ORDER BY cb.kind, cb.id
   `);
