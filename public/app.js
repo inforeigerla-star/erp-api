@@ -140,6 +140,7 @@ const BU_THEME = {
   endless: { logo: 'assets/icons/endless.png', accent: '#B89B2E' },
   sadev: { logo: 'assets/icons/sadev.png', accent: '#3E7CD6' },
   peugeot: { logo: 'assets/icons/peugeot.png', accent: '#8A8A8A' },
+  kw: { logo: 'assets/icons/kw.png', accent: '#6A2C91' },
 };
 function applyBUTheme() {
   const bu = state.businessUnits.find(b => b.id === state.selectedBU);
