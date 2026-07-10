@@ -336,27 +336,13 @@ app.delete('/warehouses/:id', async (req, res) => {
 
 // ---------- ARTICLES ----------
 app.post('/articles', async (req, res) => {
-  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
+  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency } = req.body;
   const r = await pool.query(
-    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null]
+    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS']
   );
   res.json(r.rows[0]);
-});
-app.put('/articles/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
-    const r = await pool.query(
-      `UPDATE article SET code=$1, alt_code=$2, description=$3, list_cost=$4, shipping_margin_pct=$5, fx_margin_pct=$6, profit_margin_pct=$7, iva_pct=$8, currency=$9, notes=$10, price_ars=$11, price_usd=$12
-       WHERE id=$13 RETURNING *`,
-      [code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null, id]
-    );
-    res.json(r.rows[0]);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
 });
 app.get('/articles', async (req, res) => {
   const r = await pool.query('SELECT * FROM article_price ORDER BY article_id');
@@ -640,13 +626,13 @@ app.delete('/purchases/:id', async (req, res) => {
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, items } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
     await client.query('BEGIN');
 
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS']
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH']
     );
     const sale = saleR.rows[0];
 
@@ -656,10 +642,6 @@ app.post('/sales', async (req, res) => {
          VALUES ($1,$2,$3,$4)`,
         [sale.id, item.article_id, item.quantity, item.unit_price]
       );
-    }
-
-    if (total_override != null && total_override !== '') {
-      await client.query('UPDATE sale SET total_amount=$1 WHERE id=$2', [Number(total_override), sale.id]);
     }
 
     await client.query('COMMIT');
@@ -699,16 +681,6 @@ app.get('/sales', async (req, res) => {
   res.json(r.rows);
 });
 
-app.get('/sales/:id/items', async (req, res) => {
-  const r = await pool.query(`
-    SELECT si.*, a.code, a.description
-    FROM sale_item si
-    JOIN article a ON a.id = si.article_id
-    WHERE si.sale_id=$1
-  `, [req.params.id]);
-  res.json(r.rows);
-});
-
 app.delete('/sales/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -727,6 +699,75 @@ app.delete('/sales/:id', async (req, res) => {
 app.get('/sales/pending-collection', async (req, res) => {
   const r = await pool.query('SELECT * FROM sale_pending_collection ORDER BY date DESC');
   res.json(r.rows);
+});
+
+app.get('/sale-collections/pending', async (req, res) => {
+  const r = await pool.query(`
+    SELECT sc.*, s.customer_id, c.name AS customer_name, cb.name AS cash_box_name, cb.currency AS cash_box_currency,
+           bu.name AS business_unit_name
+    FROM sale_collection sc
+    JOIN sale s ON s.id = sc.sale_id
+    JOIN customer c ON c.id = s.customer_id
+    JOIN cash_box cb ON cb.id = sc.cash_box_id
+    JOIN business_unit bu ON bu.id = sc.business_unit_id
+    WHERE sc.verified = FALSE
+    ORDER BY sc.created_at ASC
+  `);
+  res.json(r.rows);
+});
+
+app.post('/sale-collections/:id/verify', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const scR = await client.query('SELECT * FROM sale_collection WHERE id=$1 FOR UPDATE', [id]);
+    const sc = scR.rows[0];
+    if (!sc) throw new Error('Cobro no encontrado.');
+    if (sc.verified) throw new Error('Este cobro ya fue verificado.');
+
+    const movR = await client.query(
+      `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+       VALUES ($1,$2,$3,'INCOME',$4,$5,'SALE',$6) RETURNING id`,
+      [sc.cash_session_id, sc.business_unit_id, sc.project_id, sc.amount, `Cobro Venta #${sc.sale_id} (verificado)`, sc.sale_id]
+    );
+
+    await client.query(
+      `UPDATE sale_collection SET verified=TRUE, verified_at=now(), verified_by=$1, cash_movement_id=$2 WHERE id=$3`,
+      [req.user.id, movR.rows[0].id, id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/sale-collections/:id/reject', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const scR = await client.query('SELECT * FROM sale_collection WHERE id=$1 FOR UPDATE', [id]);
+    const sc = scR.rows[0];
+    if (!sc) throw new Error('Cobro no encontrado.');
+    if (sc.verified) throw new Error('Este cobro ya fue verificado, no se puede rechazar así.');
+
+    await client.query('UPDATE sale SET settled_amount = settled_amount - $1 WHERE id=$2', [sc.amount, sc.sale_id]);
+    await client.query('DELETE FROM sale_collection WHERE id=$1', [id]);
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 app.post('/sales/:id/collect', async (req, res) => {
@@ -757,15 +798,12 @@ app.post('/sales/:id/collect', async (req, res) => {
       if (!session) throw new Error(`La caja seleccionada no tiene una sesión abierta.`);
 
       await client.query(
-        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
+        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, verified)
+         VALUES ($1,$2,$3,$4,$5,$6,FALSE)`,
         [sale.id, split.cash_box_id, session.id, sale.business_unit_id, split.project_id || null, split.amount]
       );
-      await client.query(
-        `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
-         VALUES ($1,$2,$3,'INCOME',$4,$5,'SALE',$6)`,
-        [session.id, sale.business_unit_id, split.project_id || null, split.amount, `Cobro Venta #${sale.id}`, sale.id]
-      );
+      // El movimiento de caja NO se crea todavía: queda pendiente hasta que se verifique
+      // que el dinero se movió físicamente a esa caja/sobre (ver /sale-collections/:id/verify).
     }
 
     await client.query('UPDATE sale SET settled_amount = settled_amount + $1 WHERE id=$2', [splitTotal, sale.id]);

@@ -203,6 +203,7 @@ const viewTitles = {
   dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
   customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
+  verifycollections: 'Verificar cobros',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -232,6 +233,7 @@ async function renderView() {
       case 'customers': await renderCustomers(); break;
       case 'projects': await renderProjects(); break;
       case 'cash': await renderCash(); break;
+      case 'verifycollections': await renderVerifyCollections(); break;
       case 'users': await renderUsers(); break;
       case 'debtors': await renderDebtors(); break;
     }
@@ -1066,7 +1068,7 @@ async function submitCollect(saleId) {
   try {
     await api(`/sales/${saleId}/collect`, { method: 'POST', body: JSON.stringify({ splits }) });
     closeModal();
-    toast('Cobro registrado y distribuido entre las cajas.');
+    toast('Cobro registrado. Queda pendiente de verificación física en "Verificar cobros".');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1414,6 +1416,55 @@ function cashBoxIcon(name, kind) {
     if (n.includes(key)) return `<span class="cashbox-tile-emoji">${emojiMap[key]}</span>`;
   }
   return `<span class="cashbox-tile-emoji">${kind === 'SOBRE' ? '✉️' : '💰'}</span>`;
+}
+
+async function renderVerifyCollections() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+  const pending = await api('/sale-collections/pending');
+
+  const totalPending = pending.reduce((a, p) => a + Number(p.amount), 0);
+
+  el.innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Cobros esperando verificación</div><div class="kpi-value">${pending.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Monto total pendiente</div><div class="kpi-value expense">$ ${fmtMoney(totalPending)}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Cobros que todavía no se movieron físicamente a su caja/sobre</div>
+      <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el dinero cobrado en una venta ya se guardó realmente en la caja o sobre elegido. Hasta que se verifique, no afecta el saldo de esa caja.</div>
+      ${tableOrEmpty(pending, ['Fecha', 'Venta', 'Cliente', 'Unidad', 'Caja / Sobre destino', 'Monto', ''], (p) => `
+        <tr>
+          <td class="mono">${fmtDate(p.created_at)}</td>
+          <td class="mono">#${p.sale_id}</td>
+          <td>${p.customer_name}</td>
+          <td>${p.business_unit_name}</td>
+          <td>${p.cash_box_name}</td>
+          <td class="num income">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
+          <td>
+            <button class="btn btn-sm btn-primary" onclick="verifySaleCollection(${p.id})">Confirmar movimiento físico</button>
+            <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
+          </td>
+        </tr>`, 'No hay cobros esperando verificación. Todo lo cobrado ya está confirmado en su caja o sobre.')}
+    </div>
+  `;
+}
+async function verifySaleCollection(id) {
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este cobro'))) return;
+  try {
+    await api(`/sale-collections/${id}/verify`, { method: 'POST' });
+    toast('Cobro verificado. Ya impacta en el saldo de la caja/sobre.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function rejectSaleCollection(id) {
+  if (!confirm('¿Rechazar este cobro? La venta vuelve a quedar pendiente por ese monto.')) return;
+  if (!(await verifyPasswordPrompt('rechazar este cobro'))) return;
+  try {
+    await api(`/sale-collections/${id}/reject`, { method: 'POST' });
+    toast('Cobro rechazado. El saldo pendiente de la venta se actualizó.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function renderCash() {
