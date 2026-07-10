@@ -1225,10 +1225,11 @@ function newOperationModal(kind) {
         ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
       </select>
     </div>
-    <div class="field" id="paymentBoxField">
+    <div class="field" id="paymentBoxField" style="${isPurchase ? '' : 'display:none'}">
       <label>Caja o sobre de destino</label>
       ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…')}
     </div>
+    ${!isPurchase ? `<div class="hint" style="margin-top:-10px;margin-bottom:14px">La caja o sobre de destino se elige después, al procesar el cobro de esta venta.</div>` : ''}
 
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
@@ -1270,7 +1271,9 @@ function recalcLineItemsTotal() {
 
 function togglePaymentBoxField() {
   const val = document.getElementById('f_payment').value;
-  document.getElementById('paymentBoxField').style.display = val === 'CASH' ? 'block' : 'none';
+  const field = document.getElementById('paymentBoxField');
+  const isPurchaseModal = document.getElementById('f_sale_currency') == null;
+  field.style.display = (isPurchaseModal && val === 'CASH') ? 'block' : 'none';
 }
 
 function addLineItem(kind) {
@@ -1374,7 +1377,7 @@ async function createOperation(kind) {
     warehouse_id: Number(getSearchableValue('warehouse')),
     project_id: getSearchableValue('project') ? Number(getSearchableValue('project')) : null,
     payment_type: document.getElementById('f_payment').value,
-    cash_box_id: document.getElementById('f_payment').value === 'CASH' ? Number(getSearchableValue('cashbox')) : null,
+    cash_box_id: (kind === 'purchase' && document.getElementById('f_payment').value === 'CASH') ? Number(getSearchableValue('cashbox')) : null,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));
