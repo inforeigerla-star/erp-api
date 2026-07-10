@@ -782,9 +782,26 @@ async function renderWarehouses() {
       <td class="num">${fmtQty(countByWarehouse[w.id]?.units || 0)}</td>
       <td>
         <button class="btn btn-sm" onclick="showWarehouseDetail(${w.id}, '${w.name.replace(/'/g, "\\'")}')">Ver detalle</button>
+        <button class="btn btn-sm" onclick="openEditWarehouseModal(${w.id}, '${w.name.replace(/'/g, "\\'")}')">Editar</button>
         <button class="btn btn-sm btn-danger" onclick="deleteEntity('warehouses', ${w.id}, '${w.name.replace(/'/g, "\\'")}')">Eliminar</button>
       </td>
     </tr>`, 'No hay depósitos en esta unidad.')}</div>`;
+}
+function openEditWarehouseModal(id, name) {
+  openModal(`
+    <h2>Editar depósito</h2>
+    <div class="field"><label>Nombre</label><input id="f_edit_wh_name" value="${escAttr(name)}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditWarehouse(${id})">Guardar</button>
+    </div>
+  `);
+}
+async function submitEditWarehouse(id) {
+  try {
+    await api(`/warehouses/${id}`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('f_edit_wh_name').value }) });
+    closeModal(); toast('Depósito actualizado.'); await loadMasterData(); renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function showWarehouseDetail(warehouseId, name) {
@@ -860,7 +877,10 @@ async function renderSuppliers() {
   const balances = await Promise.all(rows.map(s => api(`/suppliers/${s.id}/balance`)));
   el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (s) => `
     <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(s)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(s)]?.balance || 0)}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
+    <td>
+      <button class="btn btn-sm" onclick="openEditContactModal('supplier', ${s.id})">Editar</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button>
+    </td></tr>`,
     'No hay proveedores cargados.')}</div>`;
 }
 async function renderCustomers() {
@@ -873,8 +893,47 @@ async function renderCustomers() {
   const balances = await Promise.all(rows.map(c => api(`/customers/${c.id}/balance`)));
   el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (c) => `
     <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(c)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(c)]?.balance || 0)}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button></td></tr>`,
+    <td>
+      <button class="btn btn-sm" onclick="openEditContactModal('customer', ${c.id})">Editar</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button>
+    </td></tr>`,
     'No hay clientes cargados.')}</div>`;
+}
+function openEditContactModal(kind, id) {
+  const label = kind === 'supplier' ? 'proveedor' : 'cliente';
+  const list = kind === 'supplier' ? state.cache.suppliers : state.cache.customers;
+  const c = list.find(x => x.id === id);
+  if (!c) return;
+  openModal(`
+    <h2>Editar ${label}</h2>
+    <div class="field"><label>Nombre</label><input id="f_edit_name" value="${escAttr(c.name)}"></div>
+    <div class="field"><label>CUIT / Tax ID</label><input id="f_edit_tax" value="${escAttr(c.tax_id)}"></div>
+    <div class="field-row">
+      <div class="field"><label>Teléfono</label><input id="f_edit_phone" value="${escAttr(c.phone)}"></div>
+      <div class="field"><label>Email</label><input id="f_edit_email" value="${escAttr(c.email)}"></div>
+    </div>
+    <div class="field"><label>Dirección</label><input id="f_edit_address" value="${escAttr(c.address)}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditContact('${kind}', ${id})">Guardar</button>
+    </div>
+  `);
+}
+async function submitEditContact(kind, id) {
+  const endpoint = kind === 'supplier' ? '/suppliers' : '/customers';
+  try {
+    await api(`${endpoint}/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: document.getElementById('f_edit_name').value,
+        tax_id: document.getElementById('f_edit_tax').value,
+        phone: document.getElementById('f_edit_phone').value,
+        email: document.getElementById('f_edit_email').value,
+        address: document.getElementById('f_edit_address').value,
+      }),
+    });
+    closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} actualizado.`); await loadMasterData(); renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 function newContactModal(kind) {
   const label = kind === 'supplier' ? 'proveedor' : 'cliente';
@@ -922,8 +981,27 @@ async function renderProjects() {
       <td class="num income">$ ${fmtMoney(p.profit?.total_income || 0)}</td>
       <td class="num expense">$ ${fmtMoney(p.profit?.total_expense || 0)}</td>
       <td class="num ${Number(p.profit?.net_result || 0) >= 0 ? 'income' : 'expense'}">$ ${fmtMoney(p.profit?.net_result || 0)}</td>
-      <td><button class="btn btn-sm btn-danger" onclick="deleteEntity('projects', ${p.id}, '${p.name.replace(/'/g, "\\'")}')">Eliminar</button></td>
+      <td>
+        <button class="btn btn-sm" onclick="openEditProjectModal(${p.id}, '${p.name.replace(/'/g, "\\'")}')">Editar</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteEntity('projects', ${p.id}, '${p.name.replace(/'/g, "\\'")}')">Eliminar</button>
+      </td>
     </tr>`, 'No hay proyectos en esta unidad.')}</div>`;
+}
+function openEditProjectModal(id, name) {
+  openModal(`
+    <h2>Editar proyecto</h2>
+    <div class="field"><label>Nombre</label><input id="f_edit_proj_name" value="${escAttr(name)}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditProject(${id})">Guardar</button>
+    </div>
+  `);
+}
+async function submitEditProject(id) {
+  try {
+    await api(`/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('f_edit_proj_name').value }) });
+    closeModal(); toast('Proyecto actualizado.'); await loadMasterData(); renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 function newProjectModal() {
   openModal(`

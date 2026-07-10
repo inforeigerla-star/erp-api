@@ -187,6 +187,16 @@ app.get('/projects', async (req, res) => {
   const r = await pool.query('SELECT * FROM project ORDER BY id');
   res.json(r.rows);
 });
+app.put('/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    const r = await pool.query('UPDATE project SET name=$1 WHERE id=$2 RETURNING *', [name, id]);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 app.delete('/projects/:id', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -219,6 +229,19 @@ app.post('/suppliers', async (req, res) => {
 app.get('/suppliers', async (req, res) => {
   const r = await pool.query('SELECT * FROM supplier ORDER BY id');
   res.json(r.rows);
+});
+app.put('/suppliers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, tax_id, phone, email, address } = req.body;
+    const r = await pool.query(
+      'UPDATE supplier SET name=$1, tax_id=$2, phone=$3, email=$4, address=$5 WHERE id=$6 RETURNING *',
+      [name, tax_id, phone, email, address, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 app.delete('/suppliers/:id', async (req, res) => {
   const client = await pool.connect();
@@ -255,6 +278,19 @@ app.post('/customers', async (req, res) => {
 app.get('/customers', async (req, res) => {
   const r = await pool.query('SELECT * FROM customer ORDER BY id');
   res.json(r.rows);
+});
+app.put('/customers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, tax_id, phone, email, address } = req.body;
+    const r = await pool.query(
+      'UPDATE customer SET name=$1, tax_id=$2, phone=$3, email=$4, address=$5 WHERE id=$6 RETURNING *',
+      [name, tax_id, phone, email, address, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 app.delete('/customers/:id', async (req, res) => {
   const client = await pool.connect();
@@ -293,6 +329,16 @@ app.post('/warehouses', async (req, res) => {
 app.get('/warehouses', async (req, res) => {
   const r = await pool.query('SELECT * FROM warehouse ORDER BY id');
   res.json(r.rows);
+});
+app.put('/warehouses/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    const r = await pool.query('UPDATE warehouse SET name=$1 WHERE id=$2 RETURNING *', [name, id]);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 app.delete('/warehouses/:id', async (req, res) => {
   const client = await pool.connect();
