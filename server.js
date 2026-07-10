@@ -656,23 +656,70 @@ app.post('/sales', async (req, res) => {
 });
 
 app.post('/sales/:id/confirm', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await pool.query(`UPDATE sale SET status='CONFIRMED' WHERE id=$1`, [id]);
+    await client.query('BEGIN');
+    await client.query(`UPDATE sale SET status='CONFIRMED' WHERE id=$1`, [id]);
+
+    const saleR = await client.query('SELECT * FROM sale WHERE id=$1', [id]);
+    const sale = saleR.rows[0];
+
+    if (sale.payment_type === 'CASH') {
+      if (!sale.cash_box_id) throw new Error('Esta venta contado no tiene una caja/sobre de destino asignada.');
+      const sessionR = await client.query(
+        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`,
+        [sale.cash_box_id]
+      );
+      const session = sessionR.rows[0];
+      if (!session) throw new Error('La caja/sobre de destino no tiene una sesión abierta.');
+
+      await client.query(
+        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, verified)
+         VALUES ($1,$2,$3,$4,$5,$6,FALSE)`,
+        [sale.id, sale.cash_box_id, session.id, sale.business_unit_id, sale.project_id, sale.total_amount]
+      );
+      await client.query('UPDATE sale SET settled_amount = total_amount WHERE id=$1', [sale.id]);
+    }
+
+    await client.query('COMMIT');
     const r = await pool.query('SELECT * FROM sale_detail WHERE sale_id=$1', [id]);
     res.json(r.rows);
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
 app.post('/sales/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await pool.query(`UPDATE sale SET status='CANCELLED' WHERE id=$1`, [id]);
+    await client.query('BEGIN');
+
+    const collections = await client.query('SELECT * FROM sale_collection WHERE sale_id=$1', [id]);
+    for (const sc of collections.rows) {
+      if (sc.verified) {
+        // Ya impactó en la caja: generar el egreso de reversa
+        await client.query(
+          `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+           VALUES ($1,$2,$3,'EXPENSE',$4,$5,'SALE',$6)`,
+          [sc.cash_session_id, sc.business_unit_id, sc.project_id, sc.amount, `Reversa cobro Venta #${id}`, id]
+        );
+      }
+      await client.query('DELETE FROM sale_collection WHERE id=$1', [sc.id]);
+    }
+
+    await client.query(`UPDATE sale SET status='CANCELLED', settled_amount=0 WHERE id=$1`, [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -782,7 +829,7 @@ app.post('/sales/:id/collect', async (req, res) => {
     const saleR = await client.query('SELECT * FROM sale WHERE id=$1 FOR UPDATE', [id]);
     const sale = saleR.rows[0];
     if (!sale) throw new Error('Venta no encontrada.');
-    if (sale.payment_type !== 'UNCOLLECTED') throw new Error('Esta venta no está marcada como pendiente de cobro.');
+    if (!['UNCOLLECTED', 'ACCOUNT'].includes(sale.payment_type)) throw new Error('Esta venta no admite procesar un cobro (ya es contado o ya está totalmente resuelta).');
 
     const remaining = Number(sale.total_amount) - Number(sale.settled_amount);
     const splitTotal = splits.reduce((a, s) => a + Number(s.amount), 0);
@@ -804,6 +851,14 @@ app.post('/sales/:id/collect', async (req, res) => {
       );
       // El movimiento de caja NO se crea todavía: queda pendiente hasta que se verifique
       // que el dinero se movió físicamente a esa caja/sobre (ver /sale-collections/:id/verify).
+    }
+
+    if (sale.payment_type === 'ACCOUNT') {
+      await client.query(
+        `INSERT INTO customer_account_movement (customer_id, business_unit_id, sale_id, type, amount, description)
+         VALUES ($1,$2,$3,'CREDIT',$4,$5)`,
+        [sale.customer_id, sale.business_unit_id, sale.id, splitTotal, `Cobro cta. cte. Venta #${sale.id}`]
+      );
     }
 
     await client.query('UPDATE sale SET settled_amount = settled_amount + $1 WHERE id=$2', [splitTotal, sale.id]);

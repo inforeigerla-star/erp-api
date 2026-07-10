@@ -972,7 +972,7 @@ async function renderSales() {
   el.innerHTML = `
     ${pendingBU.length ? `
     <div class="card">
-      <div class="card-title">Facturas pendientes de procesar (cobradas fuera del sistema)</div>
+      <div class="card-title">Facturas pendientes de procesar (sin cobrar o cuenta corriente)</div>
       ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
