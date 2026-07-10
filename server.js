@@ -527,17 +527,111 @@ app.get('/cash-sessions/:id/summary', async (req, res) => {
   res.json(r.rows[0]);
 });
 
-app.post('/cash-movements', async (req, res) => {
-  const { cash_box_id, business_unit_id, project_id, type, amount, description } = req.body;
-  const sessionR = await pool.query(`SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`, [cash_box_id]);
-  const session = sessionR.rows[0];
-  if (!session) return res.status(400).json({ error: 'Esa caja no tiene una sesión abierta.' });
-  const r = await pool.query(
-    `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type)
-     VALUES ($1,$2,$3,$4,$5,$6,'MANUAL') RETURNING *`,
-    [session.id, business_unit_id, project_id || null, type, amount, description]
-  );
-  res.json(r.rows[0]);
+// El movimiento manual (ingreso/egreso/transferencia) queda PENDIENTE hasta que
+// se verifica el movimiento físico real del dinero (igual que los cobros de venta).
+app.post('/cash-movements/pending', async (req, res) => {
+  try {
+    const { kind, from_cash_box_id, to_cash_box_id, amount, business_unit_id, project_id, description } = req.body;
+    if (!(amount > 0)) throw new Error('El monto debe ser mayor a cero.');
+    if (kind === 'TRANSFER') {
+      if (!from_cash_box_id || !to_cash_box_id) throw new Error('Elegí la caja/sobre de origen y destino.');
+      if (from_cash_box_id === to_cash_box_id) throw new Error('El origen y el destino deben ser distintos.');
+    } else if (kind === 'INCOME') {
+      if (!to_cash_box_id) throw new Error('Elegí la caja/sobre destino.');
+    } else if (kind === 'EXPENSE') {
+      if (!from_cash_box_id) throw new Error('Elegí la caja/sobre de origen.');
+    } else {
+      throw new Error('Tipo de movimiento inválido.');
+    }
+    const r = await pool.query(
+      `INSERT INTO pending_cash_movement (kind, from_cash_box_id, to_cash_box_id, amount, business_unit_id, project_id, description)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [kind, from_cash_box_id || null, to_cash_box_id || null, amount, business_unit_id || null, project_id || null, description || null]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/cash-movements/pending', async (req, res) => {
+  const r = await pool.query(`
+    SELECT pcm.*,
+           fb.name AS from_box_name, fb.currency AS from_box_currency,
+           tb.name AS to_box_name, tb.currency AS to_box_currency,
+           bu.name AS business_unit_name
+    FROM pending_cash_movement pcm
+    LEFT JOIN cash_box fb ON fb.id = pcm.from_cash_box_id
+    LEFT JOIN cash_box tb ON tb.id = pcm.to_cash_box_id
+    LEFT JOIN business_unit bu ON bu.id = pcm.business_unit_id
+    WHERE pcm.verified = FALSE
+    ORDER BY pcm.created_at ASC
+  `);
+  res.json(r.rows);
+});
+
+app.post('/cash-movements/pending/:id/verify', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const pR = await client.query('SELECT * FROM pending_cash_movement WHERE id=$1 FOR UPDATE', [id]);
+    const p = pR.rows[0];
+    if (!p) throw new Error('Movimiento no encontrado.');
+    if (p.verified) throw new Error('Este movimiento ya fue verificado.');
+
+    let movFromId = null, movToId = null;
+
+    if (p.kind === 'EXPENSE' || p.kind === 'TRANSFER') {
+      const sessR = await client.query(`SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`, [p.from_cash_box_id]);
+      const sess = sessR.rows[0];
+      if (!sess) throw new Error('La caja/sobre de origen no tiene sesión abierta.');
+      const movR = await client.query(
+        `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type)
+         VALUES ($1,$2,$3,'EXPENSE',$4,$5,'MANUAL') RETURNING id`,
+        [sess.id, p.business_unit_id, p.project_id, p.amount, p.description || (p.kind === 'TRANSFER' ? `Transferencia a otra caja` : 'Egreso manual')]
+      );
+      movFromId = movR.rows[0].id;
+    }
+
+    if (p.kind === 'INCOME' || p.kind === 'TRANSFER') {
+      const sessR = await client.query(`SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`, [p.to_cash_box_id]);
+      const sess = sessR.rows[0];
+      if (!sess) throw new Error('La caja/sobre de destino no tiene sesión abierta.');
+      const movR = await client.query(
+        `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type)
+         VALUES ($1,$2,$3,'INCOME',$4,$5,'MANUAL') RETURNING id`,
+        [sess.id, p.business_unit_id, p.project_id, p.amount, p.description || (p.kind === 'TRANSFER' ? `Transferencia desde otra caja` : 'Ingreso manual')]
+      );
+      movToId = movR.rows[0].id;
+    }
+
+    await client.query(
+      `UPDATE pending_cash_movement SET verified=TRUE, verified_at=now(), verified_by=$1, cash_movement_id_from=$2, cash_movement_id_to=$3 WHERE id=$4`,
+      [req.user.id, movFromId, movToId, id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/cash-movements/pending/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await pool.query('SELECT verified FROM pending_cash_movement WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Movimiento no encontrado.');
+    if (r.rows[0].verified) throw new Error('Ya fue verificado, no se puede rechazar.');
+    await pool.query('DELETE FROM pending_cash_movement WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.delete('/cash-movements/:id', async (req, res) => {

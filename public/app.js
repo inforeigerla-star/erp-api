@@ -1721,6 +1721,10 @@ const tile = (b) => `
   `;
 }
 
+let manualMovementMode = 'simple'; // 'simple' | 'transfer'
+let manualFromBox = null;
+let manualToBox = null;
+
 async function renderManualMovement() {
   document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
@@ -1731,40 +1735,159 @@ async function renderManualMovement() {
     return;
   }
 
+  manualFromBox = null;
+  manualToBox = null;
+
+  const pending = await api('/cash-movements/pending');
+
+  const boxTiles = (idPrefix, selectFn) => boxes.map(b => `
+    <div class="cashbox-picker-tile" data-box-id="${b.id}" id="${idPrefix}_${b.id}" onclick="${selectFn}(${b.id})">
+      <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
+      <div class="cashbox-picker-name">${b.name}</div>
+      <div class="cashbox-picker-meta">${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency}</div>
+    </div>`).join('');
+
   el.innerHTML = `
     <div class="card">
-      <div class="card-title">1. Elegí la caja o sobre</div>
-      <div class="cashbox-picker-grid" id="manualBoxPicker">
-        ${boxes.map(b => `
-          <div class="cashbox-picker-tile" data-box-id="${b.id}" onclick="selectManualBox(${b.id})">
-            <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
-            <div class="cashbox-picker-name">${b.name}</div>
-            <div class="cashbox-picker-meta">${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency}</div>
-          </div>
-        `).join('')}
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">1. Tipo de movimiento</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm ${manualMovementMode === 'simple' ? 'btn-primary' : ''}" onclick="setManualMovementMode('simple')">Ingreso / Egreso</button>
+          <button class="btn btn-sm ${manualMovementMode === 'transfer' ? 'btn-primary' : ''}" onclick="setManualMovementMode('transfer')">Transferencia entre caja/sobre</button>
+        </div>
+      </div>
+
+      <div id="manualModeSimple" style="display:${manualMovementMode === 'simple' ? 'block' : 'none'}">
+        <div class="hint" style="margin-bottom:10px">Elegí la caja o sobre donde entra o sale el dinero.</div>
+        <div class="cashbox-picker-grid" id="manualBoxPicker">${boxTiles('simplebox', 'selectManualBox')}</div>
+      </div>
+
+      <div id="manualModeTransfer" style="display:${manualMovementMode === 'transfer' ? 'block' : 'none'}">
+        <div class="hint" style="margin-bottom:6px"><strong>Sale de:</strong></div>
+        <div class="cashbox-picker-grid" id="manualFromPicker" style="margin-bottom:16px">${boxTiles('frombox', 'selectManualFromBox')}</div>
+        <div class="hint" style="margin-bottom:6px"><strong>Entra a:</strong></div>
+        <div class="cashbox-picker-grid" id="manualToPicker">${boxTiles('tobox', 'selectManualToBox')}</div>
       </div>
     </div>
 
     <div class="card" id="manualMovementForm" style="display:none">
       <div class="card-title">2. Datos del movimiento — <span id="selectedBoxLabel"></span></div>
       <input type="hidden" id="f_mov_box">
-      <div class="field-row">
+      <div class="field-row" id="manualTypeRow">
         <div class="field"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
         <div class="field"><label>Monto</label><input id="f_mov_amount" type="number" step="0.01" placeholder="0.00"></div>
       </div>
       <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
       <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
       <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
+      <div class="hint" style="margin-top:8px">Queda pendiente de verificación hasta confirmar que el dinero se movió físicamente (ver abajo).</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Movimientos manuales pendientes de verificación ${pending.length ? `(${pending.length})` : ''}</div>
+      ${tableOrEmpty(pending, ['Fecha', 'Tipo', 'Origen', 'Destino', 'Monto', 'Descripción', ''], (p) => `
+        <tr>
+          <td class="mono">${fmtDate(p.created_at)}</td>
+          <td>${p.kind === 'TRANSFER' ? 'Transferencia' : p.kind === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
+          <td>${p.from_box_name || '-'}</td>
+          <td>${p.to_box_name || '-'}</td>
+          <td class="num income">$ ${fmtMoney(p.amount)}</td>
+          <td>${p.description || '-'}</td>
+          <td>
+            <button class="btn btn-sm btn-primary" onclick="verifyPendingMovement(${p.id})">Confirmar movimiento físico</button>
+            <button class="btn btn-sm btn-danger" onclick="rejectPendingMovement(${p.id})">Rechazar</button>
+          </td>
+        </tr>`, 'No hay movimientos manuales esperando verificación.')}
     </div>
   `;
+}
+function setManualMovementMode(mode) {
+  manualMovementMode = mode;
+  document.getElementById('manualMovementForm').style.display = 'none';
+  renderManualMovement();
 }
 function selectManualBox(boxId) {
   const box = state.cache.cashBoxes.find(b => b.id === boxId);
   if (!box) return;
-  document.querySelectorAll('.cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
+  document.querySelectorAll('#manualBoxPicker .cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
+  document.getElementById('manualTypeRow').style.display = 'flex';
   document.getElementById('f_mov_box').value = boxId;
   document.getElementById('selectedBoxLabel').textContent = `${box.name} (${box.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${box.currency})`;
   document.getElementById('manualMovementForm').style.display = 'block';
+}
+function selectManualFromBox(boxId) {
+  manualFromBox = boxId;
+  document.querySelectorAll('#manualFromPicker .cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
+  updateTransferForm();
+}
+function selectManualToBox(boxId) {
+  manualToBox = boxId;
+  document.querySelectorAll('#manualToPicker .cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
+  updateTransferForm();
+}
+function updateTransferForm() {
+  if (!manualFromBox || !manualToBox) return;
+  if (manualFromBox === manualToBox) { toast('El origen y el destino deben ser distintos.', 'error'); return; }
+  const from = state.cache.cashBoxes.find(b => b.id === manualFromBox);
+  const to = state.cache.cashBoxes.find(b => b.id === manualToBox);
+  document.getElementById('manualTypeRow').style.display = 'none';
+  document.getElementById('selectedBoxLabel').textContent = `${from.name} → ${to.name}`;
+  document.getElementById('manualMovementForm').style.display = 'block';
+}
+
+async function createCashMovement() {
+  try {
+    if (manualMovementMode === 'transfer') {
+      if (!manualFromBox || !manualToBox) { toast('Elegí origen y destino.', 'error'); return; }
+      await api('/cash-movements/pending', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'TRANSFER',
+          from_cash_box_id: manualFromBox,
+          to_cash_box_id: manualToBox,
+          business_unit_id: state.selectedBU,
+          project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
+          amount: Number(document.getElementById('f_mov_amount').value),
+          description: document.getElementById('f_mov_desc').value,
+        }),
+      });
+    } else {
+      const boxId = document.getElementById('f_mov_box').value;
+      if (!boxId) { toast('Elegí una caja o sobre primero.', 'error'); return; }
+      const type = document.getElementById('f_mov_type').value;
+      await api('/cash-movements/pending', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: type,
+          from_cash_box_id: type === 'EXPENSE' ? Number(boxId) : null,
+          to_cash_box_id: type === 'INCOME' ? Number(boxId) : null,
+          business_unit_id: state.selectedBU,
+          project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
+          amount: Number(document.getElementById('f_mov_amount').value),
+          description: document.getElementById('f_mov_desc').value,
+        }),
+      });
+    }
+    toast('Movimiento registrado. Queda pendiente de verificación física.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function verifyPendingMovement(id) {
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico'))) return;
+  try {
+    await api(`/cash-movements/pending/${id}/verify`, { method: 'POST' });
+    toast('Movimiento verificado. Ya impacta en el saldo.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function rejectPendingMovement(id) {
+  if (!confirm('¿Rechazar este movimiento pendiente?')) return;
+  if (!(await verifyPasswordPrompt('rechazar este movimiento'))) return;
+  try {
+    await api(`/cash-movements/pending/${id}/reject`, { method: 'POST' });
+    toast('Movimiento rechazado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function openManualBalanceModal(sessionId, boxName, currentBalance) {
@@ -2043,26 +2166,6 @@ async function deleteCashMovement(id) {
     await api(`/cash-movements/${id}`, { method: 'DELETE' });
     toast('Movimiento eliminado.');
     loadCashBoxMovements();
-    renderView();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function createCashMovement() {
-  const boxId = document.getElementById('f_mov_box').value;
-  if (!boxId) { toast('Elegí una caja o sobre primero.', 'error'); return; }
-  try {
-    await api('/cash-movements', {
-      method: 'POST',
-      body: JSON.stringify({
-        cash_box_id: Number(boxId),
-        business_unit_id: state.selectedBU,
-        project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
-        type: document.getElementById('f_mov_type').value,
-        amount: Number(document.getElementById('f_mov_amount').value),
-        description: document.getElementById('f_mov_desc').value,
-      }),
-    });
-    toast('Movimiento registrado.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
