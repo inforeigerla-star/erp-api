@@ -945,20 +945,162 @@ async function createProject() {
 // ---------------------------------------------------------
 // COMPRAS
 // ---------------------------------------------------------
+let purchasesSubTab = 'purchases';
+
 async function renderPurchases() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newOperationModal('purchase')">+ Nueva compra</button>`;
+  document.getElementById('viewActions').innerHTML = purchasesSubTab === 'purchases'
+    ? `<button class="btn btn-primary" onclick="newOperationModal('purchase')">+ Nueva compra</button>`
+    : '';
   const el = document.getElementById('view');
-  const all = await api('/purchases');
+
+  const [all, pending, verifyPending] = await Promise.all([
+    api('/purchases'), api('/purchases/pending-payment'), api('/purchase-payments/pending'),
+  ]);
   const rows = all.filter(p => p.business_unit_id === state.selectedBU);
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
+  const pendingBU = pending.filter(p => p.business_unit_id === state.selectedBU);
+  const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
+
+  const tabsHtml = `
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      <button class="btn btn-sm ${purchasesSubTab === 'purchases' ? 'btn-primary' : ''}" onclick="switchPurchasesTab('purchases')">Compras</button>
+      <button class="btn btn-sm ${purchasesSubTab === 'pay' ? 'btn-primary' : ''}" onclick="switchPurchasesTab('pay')">Procesar pago ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
+      <button class="btn btn-sm ${purchasesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchPurchasesTab('verify')">Verificar pago ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+    </div>`;
+
+  if (purchasesSubTab === 'pay') {
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Compras pendientes de procesar pago</div>
+        ${tableOrEmpty(pendingBU, ['#', 'Proveedor', 'Fecha', 'Total', 'Pagado', 'Pendiente', 'Estado', ''], (p) => `
+          <tr>
+            <td class="mono">#${p.id}</td>
+            <td>${supplierName(p.supplier_id)}</td>
+            <td class="mono">${fmtDate(p.date)}</td>
+            <td class="num">$ ${fmtMoney(p.total_amount)}</td>
+            <td class="num income">$ ${fmtMoney(p.settled_amount)}</td>
+            <td class="num expense">$ ${fmtMoney(p.remaining_amount)}</td>
+            <td>${paymentStatusBadge(p.payment_status)}</td>
+            <td><button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${p.remaining_amount})">Procesar pago</button></td>
+          </tr>`, 'No hay compras pendientes de pago en esta unidad.')}
+      </div>`;
+    return;
+  }
+
+  if (purchasesSubTab === 'verify') {
+    const totalPending = verifyBU.reduce((a, p) => a + Number(p.amount), 0);
+    el.innerHTML = tabsHtml + `
+      <div class="kpi-row">
+        <div class="kpi"><div class="kpi-label">Pagos esperando verificación</div><div class="kpi-value">${verifyBU.length}</div></div>
+        <div class="kpi"><div class="kpi-label">Monto total pendiente</div><div class="kpi-value expense">$ ${fmtMoney(totalPending)}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Pagos que todavía no se movieron físicamente desde su caja/sobre</div>
+        <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el pago de la compra ya salió realmente de la caja o sobre elegido.</div>
+        ${tableOrEmpty(verifyBU, ['Fecha', 'Compra', 'Proveedor', 'Caja / Sobre origen', 'Monto', ''], (p) => `
+          <tr>
+            <td class="mono">${fmtDate(p.created_at)}</td>
+            <td class="mono">#${p.purchase_id}</td>
+            <td>${p.supplier_name}</td>
+            <td>${p.cash_box_name}</td>
+            <td class="num expense">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="verifyPurchasePayment(${p.id})">Confirmar movimiento físico</button>
+              <button class="btn btn-sm btn-danger" onclick="rejectPurchasePayment(${p.id})">Rechazar</button>
+            </td>
+          </tr>`, 'No hay pagos esperando verificación.')}
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = tabsHtml + `<div class="card">${tableOrEmpty(rows, ['#', 'Proveedor', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
     <tr>
       <td class="mono">#${p.id}</td>
+      <td>${supplierName(p.supplier_id)}</td>
       <td class="mono">${fmtDate(p.date)}</td>
       <td>${statusBadge(p.status)}</td>
       <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
       <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
       <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
     </tr>`, 'No hay compras registradas en esta unidad.')}</div>`;
+}
+function switchPurchasesTab(tab) {
+  purchasesSubTab = tab;
+  renderView();
+}
+function supplierName(id) {
+  return state.cache.suppliers.find(s => s.id === id)?.name || `Proveedor #${id}`;
+}
+function paymentStatusBadge(status) {
+  const map = { PENDIENTE: 'pending', PARCIAL: 'pending', PAGADO: 'confirmed' };
+  return `<span class="badge badge-${map[status] || 'pending'}">${status}</span>`;
+}
+function openPayModal(purchaseId, remaining) {
+  const boxItems = state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.currency})` }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  openModal(`
+    <h2>Procesar pago — Compra #${purchaseId}</h2>
+    <div class="hint" style="margin-bottom:14px">Saldo pendiente: <strong>$ ${fmtMoney(remaining)}</strong>. Repartí el monto pagado entre una o más cajas.</div>
+    <div class="line-items" id="paySplits"></div>
+    <button class="btn btn-sm" onclick="addPaySplit()">+ Agregar caja</button>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitPay(${purchaseId})">Confirmar pago</button>
+    </div>
+  `);
+  window._payBoxItems = boxItems;
+  window._payProjItems = projItems;
+  addPaySplit();
+}
+let paySplitCount = 0;
+function addPaySplit() {
+  const id = paySplitCount++;
+  const container = document.getElementById('paySplits');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `psplit_${id}`;
+  row.innerHTML = `
+    ${searchableSelectHtml(`pbox_${id}`, window._payBoxItems, 'Buscar caja…')}
+    <input type="number" step="0.01" placeholder="Monto" id="pamount_${id}">
+    ${searchableSelectHtml(`pproj_${id}`, window._payProjItems, 'Buscar proyecto…', 'Sin proyecto')}
+    <button class="remove-line" onclick="document.getElementById('psplit_${id}').remove()">×</button>
+  `;
+  container.appendChild(row);
+}
+async function submitPay(purchaseId) {
+  const rows = [...document.getElementById('paySplits').children];
+  const splits = rows.map(row => {
+    const idx = row.id.replace('psplit_', '');
+    return {
+      cash_box_id: Number(getSearchableValue(`pbox_${idx}`)),
+      amount: Number(document.getElementById(`pamount_${idx}`).value),
+      project_id: getSearchableValue(`pproj_${idx}`) ? Number(getSearchableValue(`pproj_${idx}`)) : null,
+    };
+  }).filter(s => s.amount > 0);
+
+  if (!splits.length) { toast('Agregá al menos un monto.', 'error'); return; }
+  try {
+    await api(`/purchases/${purchaseId}/pay`, { method: 'POST', body: JSON.stringify({ splits }) });
+    closeModal();
+    toast('Pago registrado. Queda pendiente de verificación física.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function verifyPurchasePayment(id) {
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este pago'))) return;
+  try {
+    await api(`/purchase-payments/${id}/verify`, { method: 'POST' });
+    toast('Pago verificado. Ya impacta en el saldo.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function rejectPurchasePayment(id) {
+  if (!confirm('¿Rechazar este pago pendiente?')) return;
+  if (!(await verifyPasswordPrompt('rechazar este pago'))) return;
+  try {
+    await api(`/purchase-payments/${id}/reject`, { method: 'POST' });
+    toast('Pago rechazado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---------------------------------------------------------
@@ -1453,11 +1595,11 @@ function newOperationModal(kind) {
         ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
       </select>
     </div>
-    <div class="field" id="paymentBoxField" style="${isPurchase ? '' : 'display:none'}">
+    <div class="field" id="paymentBoxField" style="display:none">
       <label>Caja o sobre de destino</label>
       ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…')}
     </div>
-    ${!isPurchase ? `<div class="hint" style="margin-top:-10px;margin-bottom:14px">La caja o sobre de destino se elige después, al procesar el cobro de esta venta.</div>` : ''}
+    <div class="hint" style="margin-top:-10px;margin-bottom:14px">La caja o sobre de destino se elige después, al procesar el ${isPurchase ? 'pago de esta compra' : 'cobro de esta venta'}.</div>
 
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
@@ -1498,10 +1640,7 @@ function recalcLineItemsTotal() {
 }
 
 function togglePaymentBoxField() {
-  const val = document.getElementById('f_payment').value;
-  const field = document.getElementById('paymentBoxField');
-  const isPurchaseModal = document.getElementById('f_sale_currency') == null;
-  field.style.display = (isPurchaseModal && val === 'CASH') ? 'block' : 'none';
+  document.getElementById('paymentBoxField').style.display = 'none';
 }
 
 function addLineItem(kind) {
@@ -1605,7 +1744,7 @@ async function createOperation(kind) {
     warehouse_id: Number(getSearchableValue('warehouse')),
     project_id: getSearchableValue('project') ? Number(getSearchableValue('project')) : null,
     payment_type: document.getElementById('f_payment').value,
-    cash_box_id: (kind === 'purchase' && document.getElementById('f_payment').value === 'CASH') ? Number(getSearchableValue('cashbox')) : null,
+    cash_box_id: null,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));

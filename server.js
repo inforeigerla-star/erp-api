@@ -691,12 +691,155 @@ app.post('/purchases/:id/confirm', async (req, res) => {
 });
 
 app.post('/purchases/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await pool.query(`UPDATE purchase SET status='CANCELLED' WHERE id=$1`, [id]);
+    await client.query('BEGIN');
+
+    const payments = await client.query('SELECT * FROM purchase_payment WHERE purchase_id=$1', [id]);
+    for (const pp of payments.rows) {
+      if (pp.verified) {
+        await client.query(
+          `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+           VALUES ($1,$2,$3,'INCOME',$4,$5,'PURCHASE',$6)`,
+          [pp.cash_session_id, pp.business_unit_id, pp.project_id, pp.amount, `Reversa pago Compra #${id}`, id]
+        );
+      }
+      await client.query('DELETE FROM purchase_payment WHERE id=$1', [pp.id]);
+    }
+
+    await client.query(`UPDATE purchase SET status='CANCELLED', settled_amount=0 WHERE id=$1`, [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/purchases/pending-payment', async (req, res) => {
+  const r = await pool.query('SELECT * FROM purchase_pending_payment ORDER BY date ASC');
+  res.json(r.rows);
+});
+
+app.post('/purchases/:id/pay', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { splits } = req.body; // [{ cash_box_id, amount, project_id }]
+    if (!splits || !splits.length) throw new Error('Agregá al menos una caja con un monto.');
+
+    await client.query('BEGIN');
+    const pR = await client.query('SELECT * FROM purchase WHERE id=$1 FOR UPDATE', [id]);
+    const purchase = pR.rows[0];
+    if (!purchase) throw new Error('Compra no encontrada.');
+    if (!['CASH', 'ACCOUNT'].includes(purchase.payment_type)) throw new Error('Esta compra no admite procesar un pago.');
+
+    const remaining = Number(purchase.total_amount) - Number(purchase.settled_amount);
+    const splitTotal = splits.reduce((a, s) => a + Number(s.amount), 0);
+    if (splitTotal <= 0) throw new Error('El monto a pagar debe ser mayor a cero.');
+    if (splitTotal > remaining + 0.01) throw new Error(`El total a pagar ($${splitTotal}) supera el saldo pendiente ($${remaining}).`);
+
+    for (const split of splits) {
+      const sessionR = await client.query(`SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`, [split.cash_box_id]);
+      const session = sessionR.rows[0];
+      if (!session) throw new Error('La caja seleccionada no tiene una sesión abierta.');
+
+      await client.query(
+        `INSERT INTO purchase_payment (purchase_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, verified)
+         VALUES ($1,$2,$3,$4,$5,$6,FALSE)`,
+        [purchase.id, split.cash_box_id, session.id, purchase.business_unit_id, split.project_id || null, split.amount]
+      );
+    }
+
+    if (purchase.payment_type === 'ACCOUNT') {
+      await client.query(
+        `INSERT INTO supplier_account_movement (supplier_id, business_unit_id, purchase_id, type, amount, description)
+         VALUES ($1,$2,$3,'CREDIT',$4,$5)`,
+        [purchase.supplier_id, purchase.business_unit_id, purchase.id, splitTotal, `Pago cta. cte. Compra #${purchase.id}`]
+      );
+    }
+
+    await client.query('UPDATE purchase SET settled_amount = settled_amount + $1 WHERE id=$2', [splitTotal, purchase.id]);
+    await client.query('COMMIT');
+    const updated = await pool.query('SELECT * FROM purchase_pending_payment WHERE id=$1', [id]);
+    res.json(updated.rows[0] || { ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/purchase-payments/pending', async (req, res) => {
+  const r = await pool.query(`
+    SELECT pp.*, s.name AS supplier_name, cb.name AS cash_box_name, cb.currency AS cash_box_currency,
+           bu.name AS business_unit_name
+    FROM purchase_payment pp
+    JOIN purchase pu ON pu.id = pp.purchase_id
+    JOIN supplier s ON s.id = pu.supplier_id
+    JOIN cash_box cb ON cb.id = pp.cash_box_id
+    JOIN business_unit bu ON bu.id = pp.business_unit_id
+    WHERE pp.verified = FALSE
+    ORDER BY pp.created_at ASC
+  `);
+  res.json(r.rows);
+});
+
+app.post('/purchase-payments/:id/verify', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const ppR = await client.query('SELECT * FROM purchase_payment WHERE id=$1 FOR UPDATE', [id]);
+    const pp = ppR.rows[0];
+    if (!pp) throw new Error('Pago no encontrado.');
+    if (pp.verified) throw new Error('Este pago ya fue verificado.');
+
+    const movR = await client.query(
+      `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+       VALUES ($1,$2,$3,'EXPENSE',$4,$5,'PURCHASE',$6) RETURNING id`,
+      [pp.cash_session_id, pp.business_unit_id, pp.project_id, pp.amount, `Pago Compra #${pp.purchase_id} (verificado)`, pp.purchase_id]
+    );
+
+    await client.query(
+      `UPDATE purchase_payment SET verified=TRUE, verified_at=now(), verified_by=$1, cash_movement_id=$2 WHERE id=$3`,
+      [req.user.id, movR.rows[0].id, id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/purchase-payments/:id/reject', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    await client.query('BEGIN');
+    const ppR = await client.query('SELECT * FROM purchase_payment WHERE id=$1 FOR UPDATE', [id]);
+    const pp = ppR.rows[0];
+    if (!pp) throw new Error('Pago no encontrado.');
+    if (pp.verified) throw new Error('Ya fue verificado, no se puede rechazar.');
+
+    await client.query('UPDATE purchase SET settled_amount = settled_amount - $1 WHERE id=$2', [pp.amount, pp.purchase_id]);
+    await client.query('DELETE FROM purchase_payment WHERE id=$1', [pp.id]);
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
