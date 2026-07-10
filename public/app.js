@@ -203,7 +203,6 @@ const viewTitles = {
   dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
   customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
-  verifycollections: 'Verificar cobros',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -233,7 +232,6 @@ async function renderView() {
       case 'customers': await renderCustomers(); break;
       case 'projects': await renderProjects(); break;
       case 'cash': await renderCash(); break;
-      case 'verifycollections': await renderVerifyCollections(); break;
       case 'users': await renderUsers(); break;
       case 'debtors': await renderDebtors(); break;
     }
@@ -962,34 +960,78 @@ async function renderPurchases() {
 // ---------------------------------------------------------
 // VENTAS
 // ---------------------------------------------------------
+let salesSubTab = 'sales';
+
 async function renderSales() {
-  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newOperationModal('sale')">+ Nueva venta</button>`;
+  document.getElementById('viewActions').innerHTML = salesSubTab === 'sales'
+    ? `<button class="btn btn-primary" onclick="newOperationModal('sale')">+ Nueva venta</button>`
+    : '';
   const el = document.getElementById('view');
-  const [all, pending] = await Promise.all([api('/sales'), api('/sales/pending-collection')]);
+
+  const [all, pending, verifyPending] = await Promise.all([
+    api('/sales'), api('/sales/pending-collection'), api('/sale-collections/pending'),
+  ]);
   const rows = all.filter(s => s.business_unit_id === state.selectedBU);
   const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
+  const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
 
-  el.innerHTML = `
-    ${pendingBU.length ? `
-    <div class="card">
-      <div class="card-title">Facturas pendientes de procesar (sin cobrar o cuenta corriente)</div>
-      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
-        <tr>
-          <td class="mono">#${s.id}</td>
-          <td>${customerName(s.customer_id)}</td>
-          <td class="mono">${customerTaxId(s.customer_id)}</td>
-          <td class="mono">${fmtDate(s.date)}</td>
-          <td class="num">$ ${fmtMoney(s.total_amount)}</td>
-          <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
-          <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
-          <td>${collectionBadge(s.collection_status)}</td>
-          <td>
-            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
-            ${s.collection_status !== 'COBRADO' ? `<button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>` : ''}
-          </td>
-        </tr>`, '')}
-    </div>` : ''}
+  const tabsHtml = `
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      <button class="btn btn-sm ${salesSubTab === 'sales' ? 'btn-primary' : ''}" onclick="switchSalesTab('sales')">Ventas</button>
+      <button class="btn btn-sm ${salesSubTab === 'collect' ? 'btn-primary' : ''}" onclick="switchSalesTab('collect')">Procesar cobro ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
+      <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+    </div>`;
 
+  if (salesSubTab === 'collect') {
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Facturas pendientes de procesar (sin cobrar o cuenta corriente)</div>
+        ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+          <tr>
+            <td class="mono">#${s.id}</td>
+            <td>${customerName(s.customer_id)}</td>
+            <td class="mono">${customerTaxId(s.customer_id)}</td>
+            <td class="mono">${fmtDate(s.date)}</td>
+            <td class="num">$ ${fmtMoney(s.total_amount)}</td>
+            <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
+            <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
+            <td>${collectionBadge(s.collection_status)}</td>
+            <td>
+              <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+              <button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>
+            </td>
+          </tr>`, 'No hay facturas pendientes de procesar en esta unidad.')}
+      </div>`;
+    return;
+  }
+
+  if (salesSubTab === 'verify') {
+    const totalPending = verifyBU.reduce((a, p) => a + Number(p.amount), 0);
+    el.innerHTML = tabsHtml + `
+      <div class="kpi-row">
+        <div class="kpi"><div class="kpi-label">Cobros esperando verificación</div><div class="kpi-value">${verifyBU.length}</div></div>
+        <div class="kpi"><div class="kpi-label">Monto total pendiente</div><div class="kpi-value expense">$ ${fmtMoney(totalPending)}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Cobros que todavía no se movieron físicamente a su caja/sobre</div>
+        <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el dinero cobrado en una venta ya se guardó realmente en la caja o sobre elegido. Hasta que se verifique, no afecta el saldo de esa caja.</div>
+        ${tableOrEmpty(verifyBU, ['Fecha', 'Venta', 'Cliente', 'Caja / Sobre destino', 'Monto', ''], (p) => `
+          <tr>
+            <td class="mono">${fmtDate(p.created_at)}</td>
+            <td class="mono">#${p.sale_id}</td>
+            <td>${p.customer_name}</td>
+            <td>${p.cash_box_name}</td>
+            <td class="num income">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="verifySaleCollection(${p.id})">Confirmar movimiento físico</button>
+              <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
+            </td>
+          </tr>`, 'No hay cobros esperando verificación. Todo lo cobrado ya está confirmado en su caja o sobre.')}
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = tabsHtml + `
     <div class="card">
       <div class="card-title">Todas las ventas</div>
       ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
@@ -1008,6 +1050,10 @@ async function renderSales() {
         </tr>`, 'No hay ventas registradas en esta unidad.')}
     </div>
   `;
+}
+function switchSalesTab(tab) {
+  salesSubTab = tab;
+  renderView();
 }
 function customerTaxId(id) {
   return state.cache.customers.find(c => c.id === id)?.tax_id || '-';
@@ -1421,37 +1467,7 @@ function cashBoxIcon(name, kind) {
   return `<span class="cashbox-tile-emoji">${kind === 'SOBRE' ? '✉️' : '💰'}</span>`;
 }
 
-async function renderVerifyCollections() {
-  document.getElementById('viewActions').innerHTML = '';
-  const el = document.getElementById('view');
-  const pending = await api('/sale-collections/pending');
 
-  const totalPending = pending.reduce((a, p) => a + Number(p.amount), 0);
-
-  el.innerHTML = `
-    <div class="kpi-row">
-      <div class="kpi"><div class="kpi-label">Cobros esperando verificación</div><div class="kpi-value">${pending.length}</div></div>
-      <div class="kpi"><div class="kpi-label">Monto total pendiente</div><div class="kpi-value expense">$ ${fmtMoney(totalPending)}</div></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Cobros que todavía no se movieron físicamente a su caja/sobre</div>
-      <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el dinero cobrado en una venta ya se guardó realmente en la caja o sobre elegido. Hasta que se verifique, no afecta el saldo de esa caja.</div>
-      ${tableOrEmpty(pending, ['Fecha', 'Venta', 'Cliente', 'Unidad', 'Caja / Sobre destino', 'Monto', ''], (p) => `
-        <tr>
-          <td class="mono">${fmtDate(p.created_at)}</td>
-          <td class="mono">#${p.sale_id}</td>
-          <td>${p.customer_name}</td>
-          <td>${p.business_unit_name}</td>
-          <td>${p.cash_box_name}</td>
-          <td class="num income">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
-          <td>
-            <button class="btn btn-sm btn-primary" onclick="verifySaleCollection(${p.id})">Confirmar movimiento físico</button>
-            <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
-          </td>
-        </tr>`, 'No hay cobros esperando verificación. Todo lo cobrado ya está confirmado en su caja o sobre.')}
-    </div>
-  `;
-}
 async function verifySaleCollection(id) {
   if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este cobro'))) return;
   try {
