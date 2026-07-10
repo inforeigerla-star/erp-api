@@ -202,7 +202,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 // Navegación
 // ---------------------------------------------------------
 const viewTitles = {
-  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas',
+  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
   customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
 };
@@ -228,6 +228,7 @@ async function renderView() {
       case 'stock': await renderStock(); break;
       case 'purchases': await renderPurchases(); break;
       case 'sales': await renderSales(); break;
+      case 'quotes': await renderQuotes(); break;
       case 'articles': await renderArticles(); break;
       case 'warehouses': await renderWarehouses(); break;
       case 'suppliers': await renderSuppliers(); break;
@@ -962,6 +963,117 @@ async function renderPurchases() {
 // ---------------------------------------------------------
 // VENTAS
 // ---------------------------------------------------------
+async function renderQuotes() {
+  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newQuoteModal()">+ Nuevo presupuesto</button>`;
+  const el = document.getElementById('view');
+  const all = await api('/quotes');
+  const rows = all.filter(q => q.business_unit_id === state.selectedBU);
+
+  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Cliente', 'Fecha', 'Estado', 'Total', ''], (q) => `
+    <tr>
+      <td class="mono">#${q.id}</td>
+      <td>${customerName(q.customer_id)}</td>
+      <td class="mono">${fmtDate(q.date)}</td>
+      <td>${quoteStatusBadge(q.status)}</td>
+      <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
+      <td>
+        <button class="btn btn-sm" onclick="showQuoteDetail(${q.id})">Detalle</button>
+        ${q.status === 'PENDING' ? `<button class="btn btn-sm btn-primary" onclick="convertQuoteToSale(${q.id})">Convertir en venta</button>` : ''}
+        <button class="btn btn-sm btn-danger" onclick="deleteQuote(${q.id})">Eliminar</button>
+      </td>
+    </tr>`, 'No hay presupuestos cargados en esta unidad.')}</div>`;
+}
+function quoteStatusBadge(status) {
+  const map = { PENDING: 'pending', CONVERTED: 'confirmed', CANCELLED: 'cancelled' };
+  const label = { PENDING: 'Pendiente', CONVERTED: 'Convertido', CANCELLED: 'Cancelado' };
+  return `<span class="badge badge-${map[status]}">${label[status]}</span>`;
+}
+async function showQuoteDetail(id) {
+  const items = await api(`/quotes/${id}/items`);
+  openModal(`
+    <h2>Detalle — Presupuesto #${id}</h2>
+    ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad', 'Precio unit.', 'Subtotal'], (i) => `
+      <tr>
+        <td class="mono">${i.code}</td>
+        <td>${i.description}</td>
+        <td class="num">${fmtQty(i.quantity)}</td>
+        <td class="num">$ ${fmtMoney(i.unit_price)}</td>
+        <td class="num income">$ ${fmtMoney(i.subtotal)}</td>
+      </tr>`, 'Sin artículos.')}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
+async function deleteQuote(id) {
+  if (!confirm(`¿Eliminar el presupuesto #${id}?`)) return;
+  try { await api(`/quotes/${id}`, { method: 'DELETE' }); toast('Presupuesto eliminado.'); renderView(); } catch (e) { toast(e.message, 'error'); }
+}
+
+function newQuoteModal() {
+  const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
+  const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+
+  lineItemCount = 0;
+  openModal(`
+    <h2>Nuevo presupuesto</h2>
+    <div class="field"><label>Cliente</label>${searchableSelectHtml('quote_contact', contactItems, 'Buscar cliente…')}</div>
+    <div class="field-row">
+      <div class="field"><label>Depósito (opcional)</label>${searchableSelectHtml('quote_warehouse', whItems, 'Buscar depósito…', 'Sin depósito')}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
+    </div>
+    <div class="field"><label>Moneda</label>
+      <select id="f_quote_currency">
+        <option value="ARS">Pesos argentinos (ARS)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+    </div>
+    <div class="field"><label>Artículos</label>
+      <div class="line-items" id="lineItems"></div>
+      <button class="btn btn-sm" onclick="addLineItem('sale')">+ Agregar artículo</button>
+    </div>
+    <div class="field"><label>Observaciones (opcional)</label><input id="f_quote_notes" placeholder="Notas del presupuesto"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="createQuote()">Guardar</button>
+    </div>
+  `);
+  addLineItem('sale');
+}
+async function createQuote() {
+  const rows = [...document.getElementById('lineItems').children];
+  const items = rows.map(row => {
+    const idMatch = row.id.replace('line_', '');
+    return {
+      article_id: Number(document.getElementById(`artid_${idMatch}`).value),
+      quantity: Number(document.getElementById(`qty_${idMatch}`).value),
+      unit_price: Number(document.getElementById(`price_${idMatch}`).value),
+    };
+  }).filter(i => i.article_id);
+
+  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return; }
+
+  try {
+    await api('/quotes', {
+      method: 'POST',
+      body: JSON.stringify({
+        business_unit_id: state.selectedBU,
+        customer_id: Number(getSearchableValue('quote_contact')),
+        warehouse_id: getSearchableValue('quote_warehouse') ? Number(getSearchableValue('quote_warehouse')) : null,
+        project_id: getSearchableValue('quote_project') ? Number(getSearchableValue('quote_project')) : null,
+        currency: document.getElementById('f_quote_currency').value,
+        notes: document.getElementById('f_quote_notes').value,
+        items,
+      }),
+    });
+    closeModal();
+    toast('Presupuesto creado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function convertQuoteToSale(id) {
+  await selectQuoteToLoad(id);
+}
+
 let salesSubTab = 'sales';
 
 async function renderSales() {
@@ -1232,6 +1344,63 @@ function customerName(id) {
 }
 
 let lineItemCount = 0;
+async function openLoadQuoteModal() {
+  const all = await api('/quotes');
+  const pending = all.filter(q => q.business_unit_id === state.selectedBU && q.status === 'PENDING');
+  const backdrop = document.getElementById('modalBackdrop');
+  const previousModalHtml = document.getElementById('modal').innerHTML;
+
+  openModal(`
+    <h2>Elegir presupuesto</h2>
+    ${tableOrEmpty(pending, ['#', 'Cliente', 'Fecha', 'Total', ''], (q) => `
+      <tr>
+        <td class="mono">#${q.id}</td>
+        <td>${customerName(q.customer_id)}</td>
+        <td class="mono">${fmtDate(q.date)}</td>
+        <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
+        <td><button class="btn btn-sm btn-primary" onclick='selectQuoteToLoad(${q.id})'>Usar este</button></td>
+      </tr>`, 'No hay presupuestos pendientes en esta unidad.')}
+    <div class="modal-actions"><button class="btn" onclick='document.getElementById("modal").innerHTML = ${JSON.stringify(previousModalHtml)}'>Volver</button></div>
+  `);
+}
+
+async function selectQuoteToLoad(quoteId) {
+  const [quote, items] = await Promise.all([
+    api('/quotes').then(list => list.find(q => q.id === quoteId)),
+    api(`/quotes/${quoteId}/items`),
+  ]);
+  newOperationModal('sale');
+
+  document.getElementById('f_quote_id').value = quoteId;
+  document.getElementById('loadedQuoteLabel').textContent = ` — usando presupuesto #${quoteId}`;
+  selectSearchableOption('contact', quote.customer_id);
+  if (quote.warehouse_id) selectSearchableOption('warehouse', quote.warehouse_id);
+  if (quote.project_id) selectSearchableOption('project', quote.project_id);
+  document.getElementById('f_sale_currency').value = quote.currency;
+
+  document.getElementById('lineItems').innerHTML = '';
+  items.forEach(item => {
+    const id = lineItemCount++;
+    const container = document.getElementById('lineItems');
+    const row = document.createElement('div');
+    row.className = 'line-item-row';
+    row.id = `line_${id}`;
+    row.dataset.articleId = item.article_id;
+    row.innerHTML = `
+      <div class="article-search-wrap">
+        <input type="text" class="article-search-input" id="artsearch_${id}" value="${escAttr(item.code + ' — ' + item.description)}" readonly>
+        <input type="hidden" id="artid_${id}" value="${item.article_id}">
+      </div>
+      <input type="number" step="0.001" id="qty_${id}" value="${item.quantity}" oninput="recalcLineItemsTotal()">
+      <input type="number" step="0.01" id="price_${id}" value="${item.unit_price}" oninput="recalcLineItemsTotal()">
+      <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
+    `;
+    container.appendChild(row);
+  });
+  recalcLineItemsTotal();
+  toast('Presupuesto cargado en la venta. Revisá los datos antes de guardar.');
+}
+
 function newOperationModal(kind) {
   const isPurchase = kind === 'purchase';
   const contactItems = (isPurchase ? state.cache.suppliers : state.cache.customers)
@@ -1244,6 +1413,12 @@ function newOperationModal(kind) {
   totalManuallyEdited = false;
   openModal(`
     <h2>${isPurchase ? 'Nueva compra' : 'Nueva venta'}</h2>
+    <input type="hidden" id="f_quote_id" value="">
+    ${!isPurchase ? `
+    <div style="margin-bottom:14px">
+      <button class="btn btn-sm" onclick="openLoadQuoteModal()">Cargar desde presupuesto</button>
+      <span class="hint" id="loadedQuoteLabel"></span>
+    </div>` : ''}
     <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
       ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`)}
     </div>
@@ -1433,6 +1608,8 @@ async function createOperation(kind) {
     payload.currency = document.getElementById('f_sale_currency').value;
     const overrideVal = document.getElementById('f_total_override').value;
     if (overrideVal !== '') payload.total_override = Number(overrideVal);
+    const quoteIdVal = document.getElementById('f_quote_id')?.value;
+    if (quoteIdVal) payload.quote_id = Number(quoteIdVal);
   }
 
   try {

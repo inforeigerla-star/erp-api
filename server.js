@@ -626,13 +626,13 @@ app.delete('/purchases/:id', async (req, res) => {
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, quote_id, items } = req.body;
     await client.query('BEGIN');
 
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH']
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS', quote_id || null]
     );
     const sale = saleR.rows[0];
 
@@ -642,6 +642,14 @@ app.post('/sales', async (req, res) => {
          VALUES ($1,$2,$3,$4)`,
         [sale.id, item.article_id, item.quantity, item.unit_price]
       );
+    }
+
+    if (total_override != null && total_override !== '') {
+      await client.query('UPDATE sale SET total_amount=$1 WHERE id=$2', [Number(total_override), sale.id]);
+    }
+
+    if (quote_id) {
+      await client.query(`UPDATE quote SET status='CONVERTED' WHERE id=$1`, [quote_id]);
     }
 
     await client.query('COMMIT');
@@ -693,6 +701,72 @@ app.post('/sales/:id/cancel', async (req, res) => {
     res.status(400).json({ error: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ---------- PRESUPUESTOS ----------
+app.get('/quotes', async (req, res) => {
+  const r = await pool.query('SELECT * FROM quote ORDER BY id DESC');
+  res.json(r.rows);
+});
+
+app.get('/quotes/:id/items', async (req, res) => {
+  const r = await pool.query(`
+    SELECT qi.*, a.code, a.description
+    FROM quote_item qi
+    JOIN article a ON a.id = qi.article_id
+    WHERE qi.quote_id=$1
+  `, [req.params.id]);
+  res.json(r.rows);
+});
+
+app.post('/quotes', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { business_unit_id, customer_id, warehouse_id, project_id, currency, notes, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+    await client.query('BEGIN');
+    const qR = await client.query(
+      `INSERT INTO quote (business_unit_id, customer_id, warehouse_id, project_id, currency, notes)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id || null, project_id || null, currency || 'ARS', notes || null]
+    );
+    const quote = qR.rows[0];
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO quote_item (quote_id, article_id, quantity, unit_price) VALUES ($1,$2,$3,$4)`,
+        [quote.id, item.article_id, item.quantity, item.unit_price]
+      );
+    }
+    await client.query('COMMIT');
+    const full = await pool.query('SELECT * FROM quote WHERE id=$1', [quote.id]);
+    res.json(full.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/quotes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE sale SET quote_id=NULL WHERE quote_id=$1', [id]);
+    await pool.query('DELETE FROM quote_item WHERE quote_id=$1', [id]);
+    await pool.query('DELETE FROM quote WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/quotes/:id/cancel', async (req, res) => {
+  try {
+    await pool.query(`UPDATE quote SET status='CANCELLED' WHERE id=$1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 
