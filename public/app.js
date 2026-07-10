@@ -221,22 +221,22 @@ async function renderView() {
   el.innerHTML = '<div class="empty-state">Cargando…</div>';
   try {
     switch (state.view) {
-      case 'dashboard': return renderDashboard();
-      case 'manualmovement': return renderManualMovement();
-      case 'stock': return renderStock();
-      case 'purchases': return renderPurchases();
-      case 'sales': return renderSales();
-      case 'articles': return renderArticles();
-      case 'warehouses': return renderWarehouses();
-      case 'suppliers': return renderSuppliers();
-      case 'customers': return renderCustomers();
-      case 'projects': return renderProjects();
-      case 'cash': return renderCash();
-      case 'users': return renderUsers();
-      case 'debtors': return renderDebtors();
+      case 'dashboard': await renderDashboard(); break;
+      case 'manualmovement': await renderManualMovement(); break;
+      case 'stock': await renderStock(); break;
+      case 'purchases': await renderPurchases(); break;
+      case 'sales': await renderSales(); break;
+      case 'articles': await renderArticles(); break;
+      case 'warehouses': await renderWarehouses(); break;
+      case 'suppliers': await renderSuppliers(); break;
+      case 'customers': await renderCustomers(); break;
+      case 'projects': await renderProjects(); break;
+      case 'cash': await renderCash(); break;
+      case 'users': await renderUsers(); break;
+      case 'debtors': await renderDebtors(); break;
     }
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+    el.innerHTML = `<div class="empty-state">Error: ${e.message}<br><button class="btn btn-sm" style="margin-top:10px" onclick="renderView()">Reintentar</button></div>`;
   }
 }
 
@@ -1393,15 +1393,6 @@ async function createOperation(kind) {
 // ---------------------------------------------------------
 // CAJA
 // ---------------------------------------------------------
-async function renderCash() {
-  document.getElementById('viewActions').innerHTML = `
-    <button class="btn btn-sm" onclick="newCashBoxModal('CAJA')">+ Nueva caja</button>
-    <button class="btn btn-sm" onclick="newCashBoxModal('SOBRE')">+ Nuevo sobre</button>`;
-  const el = document.getElementById('view');
-  const dashboard = await api('/cash-boxes/dashboard');
-  const cajas = dashboard.filter(b => b.kind === 'CAJA');
-  const sobres = dashboard.filter(b => b.kind === 'SOBRE');
-
 function cashBoxIcon(name, kind) {
   const n = name.toLowerCase();
   const logoMap = {
@@ -1424,6 +1415,15 @@ function cashBoxIcon(name, kind) {
   }
   return `<span class="cashbox-tile-emoji">${kind === 'SOBRE' ? '✉️' : '💰'}</span>`;
 }
+
+async function renderCash() {
+  document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="newCashBoxModal('CAJA')">+ Nueva caja</button>
+    <button class="btn btn-sm" onclick="newCashBoxModal('SOBRE')">+ Nuevo sobre</button>`;
+  const el = document.getElementById('view');
+  const dashboard = await api('/cash-boxes/dashboard');
+  const cajas = dashboard.filter(b => b.kind === 'CAJA');
+  const sobres = dashboard.filter(b => b.kind === 'SOBRE');
 
 const tile = (b) => `
     <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}">
@@ -1470,7 +1470,12 @@ const tile = (b) => `
 async function renderManualMovement() {
   document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
-  const boxes = state.cache.cashBoxes;
+  const boxes = state.cache.cashBoxes || [];
+
+  if (!boxes.length) {
+    el.innerHTML = `<div class="empty-state">No hay cajas ni sobres cargados todavía.</div>`;
+    return;
+  }
 
   el.innerHTML = `
     <div class="card">
