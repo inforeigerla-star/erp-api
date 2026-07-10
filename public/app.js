@@ -1023,7 +1023,7 @@ function newQuoteModal() {
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
     <div class="field"><label>Moneda</label>
-      <select id="f_quote_currency">
+      <select id="f_sale_currency" onchange="refreshAllLinePrices()">
         <option value="ARS">Pesos argentinos (ARS)</option>
         <option value="USD">Dólares (USD)</option>
       </select>
@@ -1061,7 +1061,7 @@ async function createQuote() {
         customer_id: Number(getSearchableValue('quote_contact')),
         warehouse_id: getSearchableValue('quote_warehouse') ? Number(getSearchableValue('quote_warehouse')) : null,
         project_id: getSearchableValue('quote_project') ? Number(getSearchableValue('quote_project')) : null,
-        currency: document.getElementById('f_quote_currency').value,
+        currency: document.getElementById('f_sale_currency').value,
         notes: document.getElementById('f_quote_notes').value,
         items,
       }),
@@ -1348,8 +1348,7 @@ let lineItemCount = 0;
 async function openLoadQuoteModal() {
   const all = await api('/quotes');
   const pending = all.filter(q => q.business_unit_id === state.selectedBU && q.status === 'PENDING');
-  const backdrop = document.getElementById('modalBackdrop');
-  const previousModalHtml = document.getElementById('modal').innerHTML;
+  window._previousModalHtml = document.getElementById('modal').innerHTML;
 
   openModal(`
     <h2>Elegir presupuesto</h2>
@@ -1359,10 +1358,15 @@ async function openLoadQuoteModal() {
         <td>${customerName(q.customer_id)}</td>
         <td class="mono">${fmtDate(q.date)}</td>
         <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
-        <td><button class="btn btn-sm btn-primary" onclick='selectQuoteToLoad(${q.id})'>Usar este</button></td>
+        <td><button class="btn btn-sm btn-primary" onclick="selectQuoteToLoad(${q.id})">Usar este</button></td>
       </tr>`, 'No hay presupuestos pendientes en esta unidad.')}
-    <div class="modal-actions"><button class="btn" onclick='document.getElementById("modal").innerHTML = ${JSON.stringify(previousModalHtml)}'>Volver</button></div>
+    <div class="modal-actions"><button class="btn" onclick="restorePreviousModal()">Volver</button></div>
   `);
+}
+function restorePreviousModal() {
+  if (window._previousModalHtml != null) {
+    document.getElementById('modal').innerHTML = window._previousModalHtml;
+  }
 }
 
 async function selectQuoteToLoad(quoteId) {
