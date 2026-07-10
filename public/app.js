@@ -147,6 +147,8 @@ function applyBUTheme() {
   const theme = BU_THEME[key] || { logo: 'assets/logo.jpg', accent: '#2F6F4E' };
   document.getElementById('brandLogo').src = theme.logo;
   document.documentElement.style.setProperty('--bu-accent', theme.accent);
+  const watermark = document.getElementById('topbarWatermark');
+  if (watermark) watermark.src = theme.logo;
 }
 
 function newBusinessUnitModal() {

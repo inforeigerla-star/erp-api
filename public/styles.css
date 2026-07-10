@@ -169,13 +169,27 @@ button, input, select { font-family: inherit; font-size: inherit; }
 .main { flex: 1; padding: 36px 44px 70px 44px; max-width: none; width: 100%; }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 28px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--border-soft);
+  overflow: hidden;
 }
+.topbar-watermark {
+  position: absolute;
+  top: -30px;
+  right: -10px;
+  height: 160px;
+  width: auto;
+  opacity: 0.05;
+  filter: grayscale(1);
+  pointer-events: none;
+  z-index: 0;
+}
+.topbar h1, .topbar-actions { position: relative; z-index: 1; }
 .topbar h1 {
   font-family: var(--display);
   font-size: 25px;
