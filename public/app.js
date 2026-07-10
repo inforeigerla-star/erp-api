@@ -1024,6 +1024,21 @@ async function createProject() {
 // COMPRAS
 // ---------------------------------------------------------
 let purchasesSubTab = 'purchases';
+let purchasesPage = 1;
+let purchasesDateFrom = '';
+let purchasesDateTo = '';
+
+function paginationControlsHtml(idPrefix, page, total, limit) {
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+      <span class="hint">${total} resultado(s) — página ${page} de ${totalPages}</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="${idPrefix}ChangePage(${page - 1})">← Anterior</button>
+        <button class="btn btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="${idPrefix}ChangePage(${page + 1})">Siguiente →</button>
+      </div>
+    </div>`;
+}
 
 async function renderPurchases() {
   document.getElementById('viewActions').innerHTML = purchasesSubTab === 'purchases'
@@ -1031,10 +1046,9 @@ async function renderPurchases() {
     : '';
   const el = document.getElementById('view');
 
-  const [all, pending, verifyPending] = await Promise.all([
-    api('/purchases'), api('/purchases/pending-payment'), api('/purchase-payments/pending'),
+  const [pending, verifyPending] = await Promise.all([
+    api('/purchases/pending-payment'), api('/purchase-payments/pending'),
   ]);
-  const rows = all.filter(p => p.business_unit_id === state.selectedBU);
   const pendingBU = pending.filter(p => p.business_unit_id === state.selectedBU);
   const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
 
@@ -1090,19 +1104,52 @@ async function renderPurchases() {
     return;
   }
 
-  el.innerHTML = tabsHtml + `<div class="card">${tableOrEmpty(rows, ['#', 'Proveedor', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
-    <tr>
-      <td class="mono">#${p.id}</td>
-      <td>${supplierName(p.supplier_id)}</td>
-      <td class="mono">${fmtDate(p.date)}</td>
-      <td>${statusBadge(p.status)}</td>
-      <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
-      <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
-      <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
-    </tr>`, 'No hay compras registradas en esta unidad.')}</div>`;
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: purchasesPage, limit: 25 });
+  if (purchasesDateFrom) params.set('date_from', purchasesDateFrom);
+  if (purchasesDateTo) params.set('date_to', purchasesDateTo);
+  const { rows, total, limit } = await api(`/purchases/list?${params.toString()}`);
+
+  el.innerHTML = tabsHtml + `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Compras</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="date" id="purchasesDateFrom" value="${purchasesDateFrom}" onchange="purchasesApplyDateFilter()">
+          <span class="hint">a</span>
+          <input type="date" id="purchasesDateTo" value="${purchasesDateTo}" onchange="purchasesApplyDateFilter()">
+          ${(purchasesDateFrom || purchasesDateTo) ? `<button class="btn btn-sm" onclick="purchasesClearDateFilter()">Limpiar</button>` : ''}
+        </div>
+      </div>
+      ${tableOrEmpty(rows, ['#', 'Proveedor', 'Fecha', 'Estado', 'Pago', 'Total', ''], (p) => `
+        <tr>
+          <td class="mono">#${p.id}</td>
+          <td>${supplierName(p.supplier_id)}</td>
+          <td class="mono">${fmtDate(p.date)}</td>
+          <td>${statusBadge(p.status)}</td>
+          <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
+          <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
+          <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
+        </tr>`, 'No hay compras registradas en esta unidad.')}
+      ${total ? paginationControlsHtml('purchases', purchasesPage, total, limit) : ''}
+    </div>`;
+}
+function purchasesChangePage(page) {
+  purchasesPage = page;
+  renderView();
+}
+function purchasesApplyDateFilter() {
+  purchasesDateFrom = document.getElementById('purchasesDateFrom').value;
+  purchasesDateTo = document.getElementById('purchasesDateTo').value;
+  purchasesPage = 1;
+  renderView();
+}
+function purchasesClearDateFilter() {
+  purchasesDateFrom = ''; purchasesDateTo = ''; purchasesPage = 1;
+  renderView();
 }
 function switchPurchasesTab(tab) {
   purchasesSubTab = tab;
+  purchasesPage = 1;
   renderView();
 }
 function supplierName(id) {
@@ -1296,6 +1343,9 @@ async function convertQuoteToSale(id) {
 }
 
 let salesSubTab = 'sales';
+let salesPage = 1;
+let salesDateFrom = '';
+let salesDateTo = '';
 
 async function renderSales() {
   document.getElementById('viewActions').innerHTML = salesSubTab === 'sales'
@@ -1303,10 +1353,9 @@ async function renderSales() {
     : '';
   const el = document.getElementById('view');
 
-  const [all, pending, verifyPending] = await Promise.all([
-    api('/sales'), api('/sales/pending-collection'), api('/sale-collections/pending'),
+  const [pending, verifyPending] = await Promise.all([
+    api('/sales/pending-collection'), api('/sale-collections/pending'),
   ]);
-  const rows = all.filter(s => s.business_unit_id === state.selectedBU);
   const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
   const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
 
@@ -1366,9 +1415,22 @@ async function renderSales() {
     return;
   }
 
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: salesPage, limit: 25 });
+  if (salesDateFrom) params.set('date_from', salesDateFrom);
+  if (salesDateTo) params.set('date_to', salesDateTo);
+  const { rows, total, limit } = await api(`/sales/list?${params.toString()}`);
+
   el.innerHTML = tabsHtml + `
     <div class="card">
-      <div class="card-title">Todas las ventas</div>
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Todas las ventas</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="date" id="salesDateFrom" value="${salesDateFrom}" onchange="salesApplyDateFilter()">
+          <span class="hint">a</span>
+          <input type="date" id="salesDateTo" value="${salesDateTo}" onchange="salesApplyDateFilter()">
+          ${(salesDateFrom || salesDateTo) ? `<button class="btn btn-sm" onclick="salesClearDateFilter()">Limpiar</button>` : ''}
+        </div>
+      </div>
       ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
@@ -1383,11 +1445,27 @@ async function renderSales() {
             ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
           </td>
         </tr>`, 'No hay ventas registradas en esta unidad.')}
+      ${total ? paginationControlsHtml('sales', salesPage, total, limit) : ''}
     </div>
   `;
 }
+function salesChangePage(page) {
+  salesPage = page;
+  renderView();
+}
+function salesApplyDateFilter() {
+  salesDateFrom = document.getElementById('salesDateFrom').value;
+  salesDateTo = document.getElementById('salesDateTo').value;
+  salesPage = 1;
+  renderView();
+}
+function salesClearDateFilter() {
+  salesDateFrom = ''; salesDateTo = ''; salesPage = 1;
+  renderView();
+}
 function switchSalesTab(tab) {
   salesSubTab = tab;
+  salesPage = 1;
   renderView();
 }
 function customerTaxId(id) {
@@ -2406,6 +2484,9 @@ const PERMISSION_OPTIONS = [
 ];
 
 let usersSubTab = 'list';
+let activityLogPage = 1;
+let activityLogDateFrom = '';
+let activityLogDateTo = '';
 
 async function renderUsers() {
   document.getElementById('viewActions').innerHTML = usersSubTab === 'list'
@@ -2441,10 +2522,21 @@ async function renderUsers() {
   }
 
   if (usersSubTab === 'log') {
-    const logs = await api('/activity-log');
+    const params = new URLSearchParams({ page: activityLogPage, limit: 50 });
+    if (activityLogDateFrom) params.set('date_from', activityLogDateFrom);
+    if (activityLogDateTo) params.set('date_to', activityLogDateTo);
+    const { rows: logs, total, limit } = await api(`/activity-log?${params.toString()}`);
     el.innerHTML = tabsHtml + `
       <div class="card">
-        <div class="card-title">Últimas 300 acciones registradas</div>
+        <div class="section-toolbar">
+          <div class="card-title" style="margin:0">Acciones registradas</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="date" id="activityLogDateFrom" value="${activityLogDateFrom}" onchange="activityLogApplyDateFilter()">
+            <span class="hint">a</span>
+            <input type="date" id="activityLogDateTo" value="${activityLogDateTo}" onchange="activityLogApplyDateFilter()">
+            ${(activityLogDateFrom || activityLogDateTo) ? `<button class="btn btn-sm" onclick="activityLogClearDateFilter()">Limpiar</button>` : ''}
+          </div>
+        </div>
         ${tableOrEmpty(logs, ['Fecha', 'Usuario', 'Acción', 'Ruta', 'Detalle'], (l) => `
           <tr>
             <td class="mono">${fmtDate(l.created_at)}</td>
@@ -2453,6 +2545,7 @@ async function renderUsers() {
             <td class="mono">${l.path}</td>
             <td>${l.summary || '-'}</td>
           </tr>`, 'Sin actividad registrada todavía.')}
+        ${total ? paginationControlsHtml('activityLog', activityLogPage, total, limit) : ''}
       </div>`;
     return;
   }
@@ -2473,6 +2566,21 @@ async function renderUsers() {
 }
 function switchUsersTab(tab) {
   usersSubTab = tab;
+  activityLogPage = 1;
+  renderView();
+}
+function activityLogChangePage(page) {
+  activityLogPage = page;
+  renderView();
+}
+function activityLogApplyDateFilter() {
+  activityLogDateFrom = document.getElementById('activityLogDateFrom').value;
+  activityLogDateTo = document.getElementById('activityLogDateTo').value;
+  activityLogPage = 1;
+  renderView();
+}
+function activityLogClearDateFilter() {
+  activityLogDateFrom = ''; activityLogDateTo = ''; activityLogPage = 1;
   renderView();
 }
 async function restoreTrashItem(type, id) {

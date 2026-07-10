@@ -215,8 +215,24 @@ app.delete('/trash/:type/:id', adminRequired, async (req, res) => {
 });
 
 app.get('/activity-log', adminRequired, async (req, res) => {
-  const r = await pool.query('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 300');
-  res.json(r.rows);
+  const { date_from, date_to, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = [];
+  const values = [];
+  let i = 1;
+  if (date_from) { conditions.push(`created_at >= $${i++}`); values.push(date_from); }
+  if (date_to) { conditions.push(`created_at < ($${i++}::date + interval '1 day')`); values.push(date_to); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM activity_log ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT * FROM activity_log ${where} ORDER BY created_at DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 
 // ---------- BUSINESS UNITS ----------
@@ -876,6 +892,28 @@ app.get('/purchases', async (req, res) => {
   res.json(r.rows);
 });
 
+app.get('/purchases/list', async (req, res) => {
+  const { business_unit_id, date_from, date_to, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 25));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = [];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (date_from) { conditions.push(`date >= $${i++}`); values.push(date_from); }
+  if (date_to) { conditions.push(`date < ($${i++}::date + interval '1 day')`); values.push(date_to); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM purchase ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT * FROM purchase ${where} ORDER BY id DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
+});
+
 app.delete('/purchases/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1041,6 +1079,28 @@ app.post('/quotes/:id/cancel', async (req, res) => {
 app.get('/sales', async (req, res) => {
   const r = await pool.query('SELECT * FROM sale ORDER BY id DESC');
   res.json(r.rows);
+});
+
+app.get('/sales/list', async (req, res) => {
+  const { business_unit_id, date_from, date_to, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 25));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = [];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (date_from) { conditions.push(`date >= $${i++}`); values.push(date_from); }
+  if (date_to) { conditions.push(`date < ($${i++}::date + interval '1 day')`); values.push(date_to); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM sale ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT * FROM sale ${where} ORDER BY id DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 
 app.delete('/sales/:id', async (req, res) => {
