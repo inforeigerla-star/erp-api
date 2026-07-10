@@ -1773,8 +1773,8 @@ async function renderManualMovement() {
     <div class="card" id="manualMovementForm" style="display:none">
       <div class="card-title">2. Datos del movimiento — <span id="selectedBoxLabel"></span></div>
       <input type="hidden" id="f_mov_box">
-      <div class="field-row" id="manualTypeRow">
-        <div class="field"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
+      <div class="field-row">
+        <div class="field" id="manualTypeField"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
         <div class="field"><label>Monto</label><input id="f_mov_amount" type="number" step="0.01" placeholder="0.00"></div>
       </div>
       <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
@@ -1810,7 +1810,7 @@ function selectManualBox(boxId) {
   const box = state.cache.cashBoxes.find(b => b.id === boxId);
   if (!box) return;
   document.querySelectorAll('#manualBoxPicker .cashbox-picker-tile').forEach(t => t.classList.toggle('selected', Number(t.dataset.boxId) === boxId));
-  document.getElementById('manualTypeRow').style.display = 'flex';
+  document.getElementById('manualTypeField').style.display = 'block';
   document.getElementById('f_mov_box').value = boxId;
   document.getElementById('selectedBoxLabel').textContent = `${box.name} (${box.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${box.currency})`;
   document.getElementById('manualMovementForm').style.display = 'block';
@@ -1830,7 +1830,7 @@ function updateTransferForm() {
   if (manualFromBox === manualToBox) { toast('El origen y el destino deben ser distintos.', 'error'); return; }
   const from = state.cache.cashBoxes.find(b => b.id === manualFromBox);
   const to = state.cache.cashBoxes.find(b => b.id === manualToBox);
-  document.getElementById('manualTypeRow').style.display = 'none';
+  document.getElementById('manualTypeField').style.display = 'none';
   document.getElementById('selectedBoxLabel').textContent = `${from.name} → ${to.name}`;
   document.getElementById('manualMovementForm').style.display = 'block';
 }
