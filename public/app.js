@@ -1640,6 +1640,7 @@ function cashBoxIcon(name, kind) {
     'endless': 'assets/icons/endless.png',
     'sadev': 'assets/icons/sadev.png',
     'peugeot': 'assets/icons/peugeot.png',
+    'kw': 'assets/icons/kw.png',
   };
   for (const key in logoMap) {
     if (n.includes(key)) return `<img src="${logoMap[key]}" alt="${name}" class="cashbox-tile-logo">`;
