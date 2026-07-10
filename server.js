@@ -636,7 +636,10 @@ app.post('/cash-movements/pending/:id/reject', async (req, res) => {
 
 app.delete('/cash-movements/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM cash_movement WHERE id=$1', [req.params.id]);
+    const { id } = req.params;
+    await pool.query('UPDATE pending_cash_movement SET cash_movement_id_from=NULL WHERE cash_movement_id_from=$1', [id]);
+    await pool.query('UPDATE pending_cash_movement SET cash_movement_id_to=NULL WHERE cash_movement_id_to=$1', [id]);
+    await pool.query('DELETE FROM cash_movement WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
