@@ -887,6 +887,60 @@ app.post('/purchase-payments/:id/reject', async (req, res) => {
   }
 });
 
+app.get('/reports/pnl', async (req, res) => {
+  try {
+    const { business_unit_id, date_from, date_to } = req.query;
+    if (!business_unit_id || !date_from || !date_to) throw new Error('Faltan parámetros: business_unit_id, date_from, date_to.');
+
+    const salesR = await pool.query(
+      `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
+       FROM sale WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
+      [business_unit_id, date_from, date_to]
+    );
+    const purchasesR = await pool.query(
+      `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
+       FROM purchase WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
+      [business_unit_id, date_from, date_to]
+    );
+    const manualR = await pool.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE type='INCOME'), 0) AS manual_income,
+         COALESCE(SUM(amount) FILTER (WHERE type='EXPENSE'), 0) AS manual_expense
+       FROM cash_movement
+       WHERE business_unit_id=$1 AND origin_type='MANUAL' AND created_at >= $2 AND created_at < ($3::date + interval '1 day')`,
+      [business_unit_id, date_from, date_to]
+    );
+
+    const sales_total = Number(salesR.rows[0].total);
+    const purchases_total = Number(purchasesR.rows[0].total);
+    const manual_income = Number(manualR.rows[0].manual_income);
+    const manual_expense = Number(manualR.rows[0].manual_expense);
+    const net_result = sales_total - purchases_total + manual_income - manual_expense;
+
+    res.json({
+      business_unit_id: Number(business_unit_id), date_from, date_to,
+      sales_total, sales_count: Number(salesR.rows[0].count),
+      purchases_total, purchases_count: Number(purchasesR.rows[0].count),
+      manual_income, manual_expense, net_result,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/reports/project-detail', async (req, res) => {
+  const { project_id } = req.query;
+  const r = await pool.query(`
+    SELECT cm.created_at, cm.type, cm.amount, cm.description, cm.origin_type, cm.origin_id, cb.name AS cash_box_name
+    FROM cash_movement cm
+    JOIN cash_session cs ON cs.id = cm.cash_session_id
+    JOIN cash_box cb ON cb.id = cs.cash_box_id
+    WHERE cm.project_id = $1
+    ORDER BY cm.created_at DESC
+  `, [project_id]);
+  res.json(r.rows);
+});
+
 app.get('/purchases', async (req, res) => {
   const r = await pool.query('SELECT * FROM purchase ORDER BY id DESC');
   res.json(r.rows);

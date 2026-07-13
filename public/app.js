@@ -205,7 +205,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores', reports: 'Reportes',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -225,6 +225,7 @@ async function renderView() {
   try {
     switch (state.view) {
       case 'dashboard': await renderDashboard(); break;
+      case 'reports': await renderReports(); break;
       case 'manualmovement': await renderManualMovement(); break;
       case 'stock': await renderStock(); break;
       case 'purchases': await renderPurchases(); break;
@@ -247,6 +248,119 @@ async function renderView() {
 // ---------------------------------------------------------
 // DASHBOARD
 // ---------------------------------------------------------
+function fmtDateInput(d) {
+  return d.toISOString().slice(0, 10);
+}
+function getMonthRange(offsetMonths) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0);
+  return { from: fmtDateInput(start), to: fmtDateInput(end) };
+}
+
+let reportsDateFrom = '';
+let reportsDateTo = '';
+
+async function renderReports() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+
+  if (!reportsDateFrom || !reportsDateTo) {
+    const thisMonth = getMonthRange(0);
+    reportsDateFrom = thisMonth.from;
+    reportsDateTo = thisMonth.to;
+  }
+
+  // Calcular el período anterior de igual duración, inmediatamente antes
+  const from = new Date(reportsDateFrom);
+  const to = new Date(reportsDateTo);
+  const durationMs = to.getTime() - from.getTime();
+  const prevTo = new Date(from.getTime() - 24 * 60 * 60 * 1000);
+  const prevFrom = new Date(prevTo.getTime() - durationMs);
+
+  const [current, previous] = await Promise.all([
+    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${reportsDateFrom}&date_to=${reportsDateTo}`),
+    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${fmtDateInput(prevFrom)}&date_to=${fmtDateInput(prevTo)}`),
+  ]);
+
+  const pctChange = (curr, prev) => {
+    if (prev === 0) return curr === 0 ? 0 : 100;
+    return ((curr - prev) / Math.abs(prev)) * 100;
+  };
+  const changeHtml = (curr, prev, invert) => {
+    const pct = pctChange(curr, prev);
+    const positive = invert ? pct <= 0 : pct >= 0;
+    const arrow = pct >= 0 ? '▲' : '▼';
+    return `<span class="${positive ? 'income' : 'expense'}" style="font-size:12px;font-weight:600">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+  };
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Período</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-sm" onclick="reportsSetMonth(-1)">Mes anterior</button>
+          <button class="btn btn-sm" onclick="reportsSetMonth(0)">Este mes</button>
+          <input type="date" id="reportsDateFrom" value="${reportsDateFrom}" onchange="reportsApplyDateFilter()">
+          <span class="hint">a</span>
+          <input type="date" id="reportsDateTo" value="${reportsDateTo}" onchange="reportsApplyDateFilter()">
+        </div>
+      </div>
+      <div class="hint">Comparado contra el período inmediato anterior de igual duración (${fmtDateInput(prevFrom)} a ${fmtDateInput(prevTo)}).</div>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-label">Ventas confirmadas</div>
+        <div class="kpi-value income">$ ${fmtMoney(current.sales_total)}</div>
+        <div style="margin-top:6px">${changeHtml(current.sales_total, previous.sales_total, false)}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Compras confirmadas</div>
+        <div class="kpi-value expense">$ ${fmtMoney(current.purchases_total)}</div>
+        <div style="margin-top:6px">${changeHtml(current.purchases_total, previous.purchases_total, true)}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Otros ingresos manuales</div>
+        <div class="kpi-value income">$ ${fmtMoney(current.manual_income)}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Gastos manuales</div>
+        <div class="kpi-value expense">$ ${fmtMoney(current.manual_expense)}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Estado de resultados — ${reportsDateFrom} a ${reportsDateTo}</div>
+      <table class="ledger">
+        <thead><tr><th>Concepto</th><th style="text-align:right">Período actual</th><th style="text-align:right">Período anterior</th><th style="text-align:right">Variación</th></tr></thead>
+        <tbody>
+          <tr><td>Ventas</td><td class="num income">$ ${fmtMoney(current.sales_total)}</td><td class="num">$ ${fmtMoney(previous.sales_total)}</td><td class="num">${changeHtml(current.sales_total, previous.sales_total, false)}</td></tr>
+          <tr><td>Compras (costo)</td><td class="num expense">$ ${fmtMoney(current.purchases_total)}</td><td class="num">$ ${fmtMoney(previous.purchases_total)}</td><td class="num">${changeHtml(current.purchases_total, previous.purchases_total, true)}</td></tr>
+          <tr><td>Otros ingresos</td><td class="num income">$ ${fmtMoney(current.manual_income)}</td><td class="num">$ ${fmtMoney(previous.manual_income)}</td><td class="num">-</td></tr>
+          <tr><td>Gastos operativos</td><td class="num expense">$ ${fmtMoney(current.manual_expense)}</td><td class="num">$ ${fmtMoney(previous.manual_expense)}</td><td class="num">-</td></tr>
+          <tr><td><strong>Resultado neto</strong></td>
+              <td class="num ${current.net_result >= 0 ? 'income' : 'expense'}"><strong>$ ${fmtMoney(current.net_result)}</strong></td>
+              <td class="num ${previous.net_result >= 0 ? 'income' : 'expense'}"><strong>$ ${fmtMoney(previous.net_result)}</strong></td>
+              <td class="num">${changeHtml(current.net_result, previous.net_result, false)}</td></tr>
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top:10px">Ventas y compras cuentan las confirmadas en el período por fecha de operación. Ingresos/gastos manuales son movimientos de caja cargados a mano (no ligados a una compra o venta).</div>
+    </div>
+  `;
+}
+function reportsSetMonth(offset) {
+  const range = getMonthRange(offset);
+  reportsDateFrom = range.from;
+  reportsDateTo = range.to;
+  renderView();
+}
+function reportsApplyDateFilter() {
+  reportsDateFrom = document.getElementById('reportsDateFrom').value;
+  reportsDateTo = document.getElementById('reportsDateTo').value;
+  renderView();
+}
+
 async function renderDashboard() {
   const el = document.getElementById('view');
   const [purchases, sales, stock, profitability] = await Promise.all([
