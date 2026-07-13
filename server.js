@@ -349,10 +349,11 @@ app.delete('/suppliers/:id', async (req, res) => {
 });
 
 app.post('/customers', async (req, res) => {
-  const { name, tax_id, phone, email, address } = req.body;
+  const { name, tax_id, phone, email, address, street, street_number, locality, province, country, postal_code } = req.body;
   const r = await pool.query(
-    'INSERT INTO customer (name, tax_id, phone, email, address) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-    [name, tax_id, phone, email, address]
+    `INSERT INTO customer (name, tax_id, phone, email, address, street, street_number, locality, province, country, postal_code)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [name, tax_id, phone, email, address, street, street_number, locality, province, country || 'Argentina', postal_code]
   );
   res.json(r.rows[0]);
 });
@@ -363,10 +364,11 @@ app.get('/customers', async (req, res) => {
 app.put('/customers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, tax_id, phone, email, address } = req.body;
+    const { name, tax_id, phone, email, address, street, street_number, locality, province, country, postal_code } = req.body;
     const r = await pool.query(
-      'UPDATE customer SET name=$1, tax_id=$2, phone=$3, email=$4, address=$5 WHERE id=$6 RETURNING *',
-      [name, tax_id, phone, email, address, id]
+      `UPDATE customer SET name=$1, tax_id=$2, phone=$3, email=$4, address=$5, street=$6, street_number=$7, locality=$8, province=$9, country=$10, postal_code=$11
+       WHERE id=$12 RETURNING *`,
+      [name, tax_id, phone, email, address, street, street_number, locality, province, country || 'Argentina', postal_code, id]
     );
     res.json(r.rows[0]);
   } catch (e) {

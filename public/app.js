@@ -1018,15 +1018,29 @@ function openEditContactModal(kind, id) {
   const list = kind === 'supplier' ? state.cache.suppliers : state.cache.customers;
   const c = list.find(x => x.id === id);
   if (!c) return;
+  const isCustomer = kind === 'customer';
   openModal(`
     <h2>Editar ${label}</h2>
     <div class="field"><label>Nombre</label><input id="f_edit_name" value="${escAttr(c.name)}"></div>
-    <div class="field"><label>CUIT / Tax ID</label><input id="f_edit_tax" value="${escAttr(c.tax_id)}"></div>
+    <div class="field"><label>CUIT / Identificador fiscal</label><input id="f_edit_tax" value="${escAttr(c.tax_id)}"></div>
     <div class="field-row">
       <div class="field"><label>Teléfono</label><input id="f_edit_phone" value="${escAttr(c.phone)}"></div>
       <div class="field"><label>Email</label><input id="f_edit_email" value="${escAttr(c.email)}"></div>
     </div>
-    <div class="field"><label>Dirección</label><input id="f_edit_address" value="${escAttr(c.address)}"></div>
+    ${isCustomer ? `
+    <div class="field-row">
+      <div class="field" style="flex:3"><label>Calle</label><input id="f_edit_street" value="${escAttr(c.street)}"></div>
+      <div class="field" style="flex:1"><label>Número</label><input id="f_edit_street_number" value="${escAttr(c.street_number)}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Localidad</label><input id="f_edit_locality" value="${escAttr(c.locality)}"></div>
+      <div class="field"><label>Provincia</label><input id="f_edit_province" value="${escAttr(c.province)}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>País</label><input id="f_edit_country" value="${escAttr(c.country || 'Argentina')}"></div>
+      <div class="field"><label>Código postal</label><input id="f_edit_postal_code" value="${escAttr(c.postal_code)}"></div>
+    </div>` : `
+    <div class="field"><label>Dirección</label><input id="f_edit_address" value="${escAttr(c.address)}"></div>`}
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="submitEditContact('${kind}', ${id})">Guardar</button>
@@ -1035,30 +1049,52 @@ function openEditContactModal(kind, id) {
 }
 async function submitEditContact(kind, id) {
   const endpoint = kind === 'supplier' ? '/suppliers' : '/customers';
+  const isCustomer = kind === 'customer';
   try {
-    await api(`${endpoint}/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        name: document.getElementById('f_edit_name').value,
-        tax_id: document.getElementById('f_edit_tax').value,
-        phone: document.getElementById('f_edit_phone').value,
-        email: document.getElementById('f_edit_email').value,
-        address: document.getElementById('f_edit_address').value,
-      }),
-    });
+    const payload = {
+      name: document.getElementById('f_edit_name').value,
+      tax_id: document.getElementById('f_edit_tax').value,
+      phone: document.getElementById('f_edit_phone').value,
+      email: document.getElementById('f_edit_email').value,
+    };
+    if (isCustomer) {
+      payload.street = document.getElementById('f_edit_street').value;
+      payload.street_number = document.getElementById('f_edit_street_number').value;
+      payload.locality = document.getElementById('f_edit_locality').value;
+      payload.province = document.getElementById('f_edit_province').value;
+      payload.country = document.getElementById('f_edit_country').value;
+      payload.postal_code = document.getElementById('f_edit_postal_code').value;
+    } else {
+      payload.address = document.getElementById('f_edit_address').value;
+    }
+    await api(`${endpoint}/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
     closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} actualizado.`); await loadMasterData(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 function newContactModal(kind) {
   const label = kind === 'supplier' ? 'proveedor' : 'cliente';
+  const isCustomer = kind === 'customer';
   openModal(`
     <h2>Nuevo ${label}</h2>
     <div class="field"><label>Nombre</label><input id="f_name"></div>
-    <div class="field"><label>CUIT / Tax ID</label><input id="f_tax"></div>
+    <div class="field"><label>CUIT / Identificador fiscal</label><input id="f_tax"></div>
     <div class="field-row">
       <div class="field"><label>Teléfono</label><input id="f_phone"></div>
       <div class="field"><label>Email</label><input id="f_email"></div>
     </div>
+    ${isCustomer ? `
+    <div class="field-row">
+      <div class="field" style="flex:3"><label>Calle</label><input id="f_street"></div>
+      <div class="field" style="flex:1"><label>Número</label><input id="f_street_number"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Localidad</label><input id="f_locality"></div>
+      <div class="field"><label>Provincia</label><input id="f_province"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>País</label><input id="f_country" value="Argentina"></div>
+      <div class="field"><label>Código postal</label><input id="f_postal_code"></div>
+    </div>` : ''}
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="createContact('${kind}')">Guardar</button>
@@ -1067,16 +1103,23 @@ function newContactModal(kind) {
 }
 async function createContact(kind) {
   const endpoint = kind === 'supplier' ? '/suppliers' : '/customers';
+  const isCustomer = kind === 'customer';
   try {
-    await api(endpoint, {
-      method: 'POST',
-      body: JSON.stringify({
-        name: document.getElementById('f_name').value,
-        tax_id: document.getElementById('f_tax').value,
-        phone: document.getElementById('f_phone').value,
-        email: document.getElementById('f_email').value,
-      }),
-    });
+    const payload = {
+      name: document.getElementById('f_name').value,
+      tax_id: document.getElementById('f_tax').value,
+      phone: document.getElementById('f_phone').value,
+      email: document.getElementById('f_email').value,
+    };
+    if (isCustomer) {
+      payload.street = document.getElementById('f_street').value;
+      payload.street_number = document.getElementById('f_street_number').value;
+      payload.locality = document.getElementById('f_locality').value;
+      payload.province = document.getElementById('f_province').value;
+      payload.country = document.getElementById('f_country').value;
+      payload.postal_code = document.getElementById('f_postal_code').value;
+    }
+    await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
     closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} creado.`); await loadMasterData(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1556,9 +1599,10 @@ async function renderSales() {
           <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
             <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
+            <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
             <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
             <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
-            ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
           </td>
         </tr>`, 'No hay ventas registradas en esta unidad.')}
       ${total ? paginationControlsHtml('sales', salesPage, total, limit) : ''}
@@ -1751,9 +1795,10 @@ async function showSaleDetail(saleId) {
         <td class="num income">$ ${fmtMoney(i.subtotal)}</td>
       </tr>`, 'Sin artículos registrados en esta venta.')}
     <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cerrar</button>
+      <span style="display:inline-block;width:1px;height:20px;background:var(--border);margin:0 4px"></span>
       <button class="btn" onclick="openComprobanteModal(${saleId})">Comprobante</button>
       <button class="btn" onclick="openRemitoModal(${saleId})">Remito</button>
-      <button class="btn" onclick="closeModal()">Cerrar</button>
     </div>
   `);
 }
@@ -1869,7 +1914,16 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
         <div class="section-title">Cliente</div>
         <div class="info-row"><strong>${customer.name}</strong></div>
         ${customer.tax_id ? `<div class="info-row">CUIT/Tax ID: ${customer.tax_id}</div>` : ''}
-        ${customer.address ? `<div class="info-row">${customer.address}</div>` : ''}
+        ${(() => {
+          const parts = [];
+          if (customer.street) parts.push(`${customer.street}${customer.street_number ? ' ' + customer.street_number : ''}`);
+          if (customer.locality) parts.push(customer.locality);
+          if (customer.province) parts.push(customer.province);
+          if (customer.postal_code) parts.push(`CP ${customer.postal_code}`);
+          if (customer.country) parts.push(customer.country);
+          const full = parts.length ? parts.join(', ') : (customer.address || '');
+          return full ? `<div class="info-row">${full}</div>` : '';
+        })()}
         ${customer.phone ? `<div class="info-row">Tel: ${customer.phone}</div>` : ''}
         ${customer.email ? `<div class="info-row">${customer.email}</div>` : ''}
       </div>
@@ -1897,7 +1951,6 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
     <div class="transport-box">
       <div class="section-title">Transporte</div>
       <div class="info-row"><strong>Transportista:</strong> ${sale.carrier || '—'}</div>
-      <div class="info-row"><strong>N° de seguimiento:</strong> ${sale.tracking_code || '—'}</div>
       ${sale.delivery_notes ? `<div class="info-row"><strong>Observaciones:</strong> ${sale.delivery_notes}</div>` : ''}
     </div>
     <div class="signature-area">
@@ -1926,7 +1979,6 @@ async function openRemitoModal(saleId) {
   openModal(`
     <h2>Datos de entrega — Remito Venta #${saleId}</h2>
     <div class="field"><label>Transportista</label><input id="f_carrier" value="${escAttr(data.sale.carrier)}" placeholder="Ej: Andreani, transporte propio…"></div>
-    <div class="field"><label>N° de seguimiento (opcional)</label><input id="f_tracking" value="${escAttr(data.sale.tracking_code)}"></div>
     <div class="field"><label>Observaciones de entrega (opcional)</label><input id="f_delivery_notes" value="${escAttr(data.sale.delivery_notes)}"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -1940,7 +1992,6 @@ async function submitRemito(saleId) {
       method: 'PUT',
       body: JSON.stringify({
         carrier: document.getElementById('f_carrier').value,
-        tracking_code: document.getElementById('f_tracking').value,
         delivery_notes: document.getElementById('f_delivery_notes').value,
       }),
     });
