@@ -1159,6 +1159,50 @@ app.get('/sales', async (req, res) => {
   res.json(r.rows);
 });
 
+app.get('/sales/:id/items', async (req, res) => {
+  const r = await pool.query(`
+    SELECT si.*, a.code, a.description
+    FROM sale_item si
+    JOIN article a ON a.id = si.article_id
+    WHERE si.sale_id=$1
+  `, [req.params.id]);
+  res.json(r.rows);
+});
+
+app.get('/sales/:id/full', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const saleR = await pool.query('SELECT * FROM sale WHERE id=$1', [id]);
+    const sale = saleR.rows[0];
+    if (!sale) throw new Error('Venta no encontrada.');
+    const customerR = await pool.query('SELECT * FROM customer WHERE id=$1', [sale.customer_id]);
+    const buR = await pool.query('SELECT * FROM business_unit WHERE id=$1', [sale.business_unit_id]);
+    const whR = await pool.query('SELECT * FROM warehouse WHERE id=$1', [sale.warehouse_id]);
+    const itemsR = await pool.query(`
+      SELECT si.*, a.code, a.description
+      FROM sale_item si JOIN article a ON a.id = si.article_id
+      WHERE si.sale_id=$1
+    `, [id]);
+    res.json({ sale, customer: customerR.rows[0], business_unit: buR.rows[0], warehouse: whR.rows[0], items: itemsR.rows });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/sales/:id/transport', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { carrier, tracking_code, delivery_notes } = req.body;
+    const r = await pool.query(
+      'UPDATE sale SET carrier=$1, tracking_code=$2, delivery_notes=$3 WHERE id=$4 RETURNING *',
+      [carrier || null, tracking_code || null, delivery_notes || null, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get('/sales/list', async (req, res) => {
   const { business_unit_id, date_from, date_to, page, limit } = req.query;
   const pageNum = Math.max(1, parseInt(page) || 1);

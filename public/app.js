@@ -1556,6 +1556,8 @@ async function renderSales() {
           <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
             <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
+            <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
             ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
           </td>
         </tr>`, 'No hay ventas registradas en esta unidad.')}
@@ -1748,8 +1750,207 @@ async function showSaleDetail(saleId) {
         <td class="num">$ ${fmtMoney(i.unit_price)}</td>
         <td class="num income">$ ${fmtMoney(i.subtotal)}</td>
       </tr>`, 'Sin artículos registrados en esta venta.')}
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="openComprobanteModal(${saleId})">Comprobante</button>
+      <button class="btn" onclick="openRemitoModal(${saleId})">Remito</button>
+      <button class="btn" onclick="closeModal()">Cerrar</button>
+    </div>
   `);
+}
+
+// ---------------------------------------------------------
+// COMPROBANTE Y REMITO (documentos imprimibles / PDF / envío)
+// ---------------------------------------------------------
+function buLogoPath(buName) {
+  const key = Object.keys(BU_THEME).find(k => (buName || '').toLowerCase().includes(k));
+  return BU_THEME[key]?.logo || 'assets/logo.jpg';
+}
+function docNumber(saleId) {
+  return String(saleId).padStart(8, '0');
+}
+function waLink(phone, text) {
+  const digits = (phone || '').replace(/[^0-9]/g, '');
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
+
+function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, items }) {
+  const isRemito = type === 'remito';
+  const title = isRemito ? 'REMITO DE ENTREGA' : 'COMPROBANTE DE VENTA';
+  const logo = buLogoPath(business_unit.name);
+  const number = docNumber(sale.id);
+  const dateStr = fmtDate(sale.date);
+  const currencySym = sale.currency === 'USD' ? 'US$' : '$';
+
+  const itemsRows = items.map(i => isRemito ? `
+    <tr>
+      <td class="mono">${i.code}</td>
+      <td>${i.description}</td>
+      <td class="num">${fmtQty(i.quantity)}</td>
+    </tr>` : `
+    <tr>
+      <td class="mono">${i.code}</td>
+      <td>${i.description}</td>
+      <td class="num">${fmtQty(i.quantity)}</td>
+      <td class="num">${currencySym} ${fmtMoney(i.unit_price)}</td>
+      <td class="num">${currencySym} ${fmtMoney(i.subtotal)}</td>
+    </tr>`).join('');
+
+  const itemsHeader = isRemito
+    ? `<tr><th>Código</th><th>Descripción</th><th style="text-align:right">Cantidad</th></tr>`
+    : `<tr><th>Código</th><th>Descripción</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Precio unit.</th><th style="text-align:right">Subtotal</th></tr>`;
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>${title} — ${business_unit.name} #${number}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; margin: 0; padding: 0; font-size: 13px; }
+  .sheet { max-width: 760px; margin: 0 auto; padding: 10px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1a1a1a; padding-bottom: 18px; margin-bottom: 24px; }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .header-left img { height: 56px; width: auto; }
+  .company-name { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+  .company-sub { font-size: 11px; color: #666; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-title { font-size: 15px; font-weight: 700; letter-spacing: 0.05em; color: #1a1a1a; }
+  .doc-number { font-family: 'Courier New', monospace; font-size: 13px; color: #444; margin-top: 4px; }
+  .doc-date { font-size: 12px; color: #666; margin-top: 2px; }
+  .section-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: #888; font-weight: 700; margin-bottom: 8px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; }
+  .info-box { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; }
+  .info-row { font-size: 12.5px; margin-bottom: 4px; }
+  .info-row strong { color: #333; }
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+  table.items th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; font-weight: 700; padding: 8px 6px; border-bottom: 2px solid #1a1a1a; }
+  table.items td { padding: 9px 6px; border-bottom: 1px solid #eee; font-size: 12.5px; }
+  .num { text-align: right; font-family: 'Courier New', monospace; }
+  .totals { display: flex; justify-content: flex-end; margin-bottom: 30px; }
+  .totals table { width: 260px; border-collapse: collapse; }
+  .totals td { padding: 6px 8px; font-size: 12.5px; }
+  .totals .total-row td { border-top: 2px solid #1a1a1a; font-weight: 700; font-size: 14px; padding-top: 10px; }
+  .transport-box { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin-bottom: 28px; }
+  .signature-area { display: flex; justify-content: space-between; margin-top: 60px; }
+  .signature-line { border-top: 1px solid #333; width: 220px; text-align: center; font-size: 11px; color: #666; padding-top: 6px; }
+  .footer-note { font-size: 10.5px; color: #999; text-align: center; margin-top: 40px; border-top: 1px solid #eee; padding-top: 12px; }
+  .actions { max-width: 760px; margin: 0 auto 20px; display: flex; gap: 10px; padding: 0 10px; }
+  .actions button, .actions a { font-family: inherit; font-size: 13px; padding: 9px 16px; border-radius: 7px; border: 1px solid #ccc; background: #fff; cursor: pointer; text-decoration: none; color: #1a1a1a; }
+  .actions .primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  @media print { .actions { display: none; } body { font-size: 12.5px; } }
+</style>
+</head>
+<body>
+  <div class="actions no-print">
+    <button class="primary" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el ${isRemito ? 'remito' : 'comprobante'} #${number} de ${business_unit.name}.`)}" target="_blank">📱 Enviar por WhatsApp</a>` : ''}
+    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`${title} #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el ${isRemito ? 'remito de entrega' : 'comprobante de venta'} #${number}.\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">✉️ Enviar por email</a>` : ''}
+  </div>
+
+  <div class="sheet">
+    <div class="header">
+      <div class="header-left">
+        <img src="${logo}" alt="${business_unit.name}">
+        <div>
+          <div class="company-name">${business_unit.name.toUpperCase()}</div>
+          <div class="company-sub">You One Racing S.A.S.</div>
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="doc-title">${title}</div>
+        <div class="doc-number">N° ${number}</div>
+        <div class="doc-date">${dateStr}</div>
+      </div>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="section-title">Cliente</div>
+        <div class="info-row"><strong>${customer.name}</strong></div>
+        ${customer.tax_id ? `<div class="info-row">CUIT/Tax ID: ${customer.tax_id}</div>` : ''}
+        ${customer.address ? `<div class="info-row">${customer.address}</div>` : ''}
+        ${customer.phone ? `<div class="info-row">Tel: ${customer.phone}</div>` : ''}
+        ${customer.email ? `<div class="info-row">${customer.email}</div>` : ''}
+      </div>
+      <div class="info-box">
+        <div class="section-title">${isRemito ? 'Entrega' : 'Detalle'}</div>
+        <div class="info-row">Depósito de origen: ${warehouse?.name || '-'}</div>
+        <div class="info-row">Forma de pago: ${paymentTypeLabel(sale.payment_type)}</div>
+        ${!isRemito ? `<div class="info-row">Moneda: ${sale.currency}</div>` : ''}
+      </div>
+    </div>
+
+    <table class="items">
+      <thead>${itemsHeader}</thead>
+      <tbody>${itemsRows}</tbody>
+    </table>
+
+    ${!isRemito ? `
+    <div class="totals">
+      <table>
+        <tr class="total-row"><td>TOTAL</td><td class="num">${currencySym} ${fmtMoney(sale.total_amount)}</td></tr>
+      </table>
+    </div>` : ''}
+
+    ${isRemito ? `
+    <div class="transport-box">
+      <div class="section-title">Transporte</div>
+      <div class="info-row"><strong>Transportista:</strong> ${sale.carrier || '—'}</div>
+      <div class="info-row"><strong>N° de seguimiento:</strong> ${sale.tracking_code || '—'}</div>
+      ${sale.delivery_notes ? `<div class="info-row"><strong>Observaciones:</strong> ${sale.delivery_notes}</div>` : ''}
+    </div>
+    <div class="signature-area">
+      <div class="signature-line">Firma transportista</div>
+      <div class="signature-line">Recibí conforme — Aclaración y DNI</div>
+    </div>` : ''}
+
+    <div class="footer-note">${business_unit.name} — You One Racing S.A.S. · Documento generado el ${fmtDate(new Date().toISOString())}</div>
+  </div>
+</body>
+</html>`;
+}
+
+async function openComprobanteModal(saleId) {
+  try {
+    const data = await api(`/sales/${saleId}/full`);
+    const html = buildDocumentHtml({ type: 'comprobante', ...data });
+    const win = window.open('', '_blank');
+    win.document.write(html);
+    win.document.close();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function openRemitoModal(saleId) {
+  const data = await api(`/sales/${saleId}/full`);
+  openModal(`
+    <h2>Datos de entrega — Remito Venta #${saleId}</h2>
+    <div class="field"><label>Transportista</label><input id="f_carrier" value="${escAttr(data.sale.carrier)}" placeholder="Ej: Andreani, transporte propio…"></div>
+    <div class="field"><label>N° de seguimiento (opcional)</label><input id="f_tracking" value="${escAttr(data.sale.tracking_code)}"></div>
+    <div class="field"><label>Observaciones de entrega (opcional)</label><input id="f_delivery_notes" value="${escAttr(data.sale.delivery_notes)}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitRemito(${saleId})">Guardar y generar remito</button>
+    </div>
+  `);
+}
+async function submitRemito(saleId) {
+  try {
+    await api(`/sales/${saleId}/transport`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        carrier: document.getElementById('f_carrier').value,
+        tracking_code: document.getElementById('f_tracking').value,
+        delivery_notes: document.getElementById('f_delivery_notes').value,
+      }),
+    });
+    const data = await api(`/sales/${saleId}/full`);
+    const html = buildDocumentHtml({ type: 'remito', ...data });
+    const win = window.open('', '_blank');
+    win.document.write(html);
+    win.document.close();
+    closeModal();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function customerName(id) {
