@@ -206,11 +206,33 @@ app.delete('/trash/:type/:id', adminRequired, async (req, res) => {
   const { type, id } = req.params;
   const config = TRASH_TABLES[type];
   if (!config) return res.status(400).json({ error: 'Tipo inválido.' });
+  const client = await pool.connect();
   try {
-    await pool.query(`DELETE FROM ${config.table} WHERE id=$1 AND deleted_at IS NOT NULL`, [id]);
+    await client.query('BEGIN');
+    // Limpiar filas dependientes según el tipo, para poder purgar sin violar FKs.
+    if (type === 'articles') {
+      await client.query('DELETE FROM stock_movement WHERE article_id=$1', [id]);
+      await client.query('DELETE FROM stock WHERE article_id=$1', [id]);
+      await client.query('DELETE FROM purchase_item WHERE article_id=$1', [id]);
+      await client.query('DELETE FROM sale_item WHERE article_id=$1', [id]);
+      await client.query('DELETE FROM quote_item WHERE article_id=$1', [id]);
+    } else if (type === 'warehouses') {
+      await client.query('DELETE FROM stock_movement WHERE warehouse_id=$1', [id]);
+      await client.query('DELETE FROM stock WHERE warehouse_id=$1', [id]);
+    } else if (type === 'cash-boxes') {
+      await client.query('DELETE FROM sale_collection WHERE cash_box_id=$1', [id]);
+      await client.query('DELETE FROM purchase_payment WHERE cash_box_id=$1', [id]);
+      await client.query('DELETE FROM cash_movement WHERE cash_session_id IN (SELECT id FROM cash_session WHERE cash_box_id=$1)', [id]);
+      await client.query('DELETE FROM cash_session WHERE cash_box_id=$1', [id]);
+    }
+    await client.query(`DELETE FROM ${config.table} WHERE id=$1 AND deleted_at IS NOT NULL`, [id]);
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -974,7 +996,9 @@ app.delete('/purchases/:id', async (req, res) => {
     await pool.query('DELETE FROM purchase_item WHERE purchase_id=$1', [id]);
     await pool.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
     await pool.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [id]);
+    await pool.query('UPDATE purchase_payment SET cash_movement_id=NULL WHERE purchase_id=$1', [id]);
     await pool.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
+    await pool.query('DELETE FROM purchase_payment WHERE purchase_id=$1', [id]);
     await pool.query('DELETE FROM purchase WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
