@@ -1521,7 +1521,32 @@ async function renderSales() {
       <button class="btn btn-sm ${salesSubTab === 'sales' ? 'btn-primary' : ''}" onclick="switchSalesTab('sales')">Ventas</button>
       <button class="btn btn-sm ${salesSubTab === 'collect' ? 'btn-primary' : ''}" onclick="switchSalesTab('collect')">Procesar cobro ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
       <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+      <button class="btn btn-sm ${salesSubTab === 'documents' ? 'btn-primary' : ''}" onclick="switchSalesTab('documents')">Comprobantes y remitos</button>
     </div>`;
+
+  if (salesSubTab === 'documents') {
+    const history = await api(`/sales-documents/history?business_unit_id=${state.selectedBU}`);
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Historial de comprobantes y remitos generados</div>
+        <div class="hint" style="margin-bottom:14px">Últimos 200 documentos generados en esta unidad. "Volver a abrir" regenera el documento con los datos actuales de la venta.</div>
+        ${tableOrEmpty(history, ['Fecha', 'Tipo', 'Venta', 'Cliente', 'Total', 'Generado por', ''], (h) => `
+          <tr>
+            <td class="mono">${fmtDate(h.generated_at)}</td>
+            <td>${h.type === 'remito' ? 'Remito' : 'Comprobante'}</td>
+            <td class="mono">#${h.sale_id}</td>
+            <td>${h.customer_name}</td>
+            <td class="num income">${h.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(h.total_amount)}</td>
+            <td>${h.generated_by_username || '-'}</td>
+            <td>
+              ${h.type === 'remito'
+                ? `<button class="btn btn-sm" onclick="openRemitoModal(${h.sale_id})">Volver a abrir</button>`
+                : `<button class="btn btn-sm" onclick="openComprobanteModal(${h.sale_id})">Volver a abrir</button>`}
+            </td>
+          </tr>`, 'Todavía no se generó ningún comprobante ni remito en esta unidad.')}
+      </div>`;
+    return;
+  }
 
   if (salesSubTab === 'collect') {
     el.innerHTML = tabsHtml + `
@@ -1971,6 +1996,7 @@ async function openComprobanteModal(saleId) {
     const win = window.open('', '_blank');
     win.document.write(html);
     win.document.close();
+    api(`/sales/${saleId}/document-log`, { method: 'POST', body: JSON.stringify({ type: 'comprobante' }) }).catch(() => {});
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2001,6 +2027,7 @@ async function submitRemito(saleId) {
     win.document.write(html);
     win.document.close();
     closeModal();
+    api(`/sales/${saleId}/document-log`, { method: 'POST', body: JSON.stringify({ type: 'remito' }) }).catch(() => {});
   } catch (e) { toast(e.message, 'error'); }
 }
 

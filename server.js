@@ -1205,6 +1205,39 @@ app.put('/sales/:id/transport', async (req, res) => {
   }
 });
 
+app.post('/sales/:id/document-log', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type } = req.body; // 'comprobante' | 'remito'
+    const r = await pool.query(
+      'INSERT INTO sale_document_log (sale_id, type, generated_by) VALUES ($1,$2,$3) RETURNING *',
+      [id, type, req.user.id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/sales-documents/history', async (req, res) => {
+  const { business_unit_id } = req.query;
+  const values = [];
+  let where = '';
+  if (business_unit_id) { where = 'WHERE s.business_unit_id = $1'; values.push(business_unit_id); }
+  const r = await pool.query(`
+    SELECT sdl.id, sdl.sale_id, sdl.type, sdl.generated_at, u.username AS generated_by_username,
+           c.name AS customer_name, s.total_amount, s.currency, s.status
+    FROM sale_document_log sdl
+    JOIN sale s ON s.id = sdl.sale_id
+    JOIN customer c ON c.id = s.customer_id
+    LEFT JOIN app_user u ON u.id = sdl.generated_by
+    ${where}
+    ORDER BY sdl.generated_at DESC
+    LIMIT 200
+  `, values);
+  res.json(r.rows);
+});
+
 app.get('/sales/list', async (req, res) => {
   const { business_unit_id, date_from, date_to, page, limit } = req.query;
   const pageNum = Math.max(1, parseInt(page) || 1);
