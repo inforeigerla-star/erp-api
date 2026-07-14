@@ -1741,7 +1741,7 @@ async function cancelOperation(kind, id) {
 }
 async function deleteOperation(kind, id) {
   const label = kind === 'purchases' ? 'la compra' : 'la venta';
-  if (!confirm(`¿Eliminar ${label} #${id}? Esta acción no se puede deshacer y borra su historial asociado.`)) return;
+  if (!confirm(`¿Eliminar ${label} #${id}? Si está confirmada, primero hay que cancelarla. Si no, queda en la papelera 30 días.`)) return;
   try {
     await api(`/${kind}/${id}`, { method: 'DELETE' });
     toast('Eliminado correctamente.');

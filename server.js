@@ -156,6 +156,9 @@ const TRASH_TABLES = {
   'articles': { table: 'article', nameCol: 'description', label: 'Artículo' },
   'cash-boxes': { table: 'cash_box', nameCol: 'name', label: 'Caja/Sobre' },
   'users': { table: 'app_user', nameCol: 'username', label: 'Usuario' },
+  'purchases': { table: 'purchase', nameCol: `('Compra #' || id)`, label: 'Compra' },
+  'sales': { table: 'sale', nameCol: `('Venta #' || id)`, label: 'Venta' },
+  'quotes': { table: 'quote', nameCol: `('Presupuesto #' || id)`, label: 'Presupuesto' },
 };
 
 async function purgeExpiredTrash() {
@@ -224,6 +227,27 @@ app.delete('/trash/:type/:id', adminRequired, async (req, res) => {
       await client.query('DELETE FROM purchase_payment WHERE cash_box_id=$1', [id]);
       await client.query('DELETE FROM cash_movement WHERE cash_session_id IN (SELECT id FROM cash_session WHERE cash_box_id=$1)', [id]);
       await client.query('DELETE FROM cash_session WHERE cash_box_id=$1', [id]);
+    } else if (type === 'purchases') {
+      await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
+      await client.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [id]);
+      await client.query('UPDATE purchase_payment SET cash_movement_id=NULL WHERE purchase_id=$1', [id]);
+      await client.query('DELETE FROM purchase_payment WHERE purchase_id=$1', [id]);
+    } else if (type === 'sales') {
+      await client.query('DELETE FROM sale_document_log WHERE sale_id=$1', [id]);
+      await client.query('DELETE FROM sale_item WHERE sale_id=$1', [id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', id]);
+      await client.query('DELETE FROM customer_account_movement WHERE sale_id=$1', [id]);
+      await client.query('UPDATE sale_collection SET cash_movement_id=NULL WHERE sale_id=$1', [id]);
+      await client.query('DELETE FROM sale_collection WHERE sale_id=$1', [id]);
+    } else if (type === 'quotes') {
+      await client.query('UPDATE sale SET quote_id=NULL WHERE quote_id=$1', [id]);
+      await client.query('DELETE FROM quote_item WHERE quote_id=$1', [id]);
+    } else if (type === 'business-units') {
+      const usedR = await client.query('SELECT COUNT(*) FROM cash_movement WHERE business_unit_id=$1', [id]);
+      if (Number(usedR.rows[0].count) > 0) {
+        throw new Error('Esta unidad tiene movimientos de caja en su historial y no se puede purgar definitivamente (para no perder ese registro financiero). Podés dejarla restaurada o mantenerla en la papelera.');
+      }
     }
     await client.query(`DELETE FROM ${config.table} WHERE id=$1 AND deleted_at IS NOT NULL`, [id]);
     await client.query('COMMIT');
@@ -966,7 +990,7 @@ app.get('/reports/project-detail', async (req, res) => {
 });
 
 app.get('/purchases', async (req, res) => {
-  const r = await pool.query('SELECT * FROM purchase ORDER BY id DESC');
+  const r = await pool.query('SELECT * FROM purchase WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);
 });
 
@@ -976,13 +1000,13 @@ app.get('/purchases/list', async (req, res) => {
   const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 25));
   const offset = (pageNum - 1) * pageSize;
 
-  const conditions = [];
+  const conditions = ['deleted_at IS NULL'];
   const values = [];
   let i = 1;
   if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
   if (date_from) { conditions.push(`date >= $${i++}`); values.push(date_from); }
   if (date_to) { conditions.push(`date < ($${i++}::date + interval '1 day')`); values.push(date_to); }
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const where = `WHERE ${conditions.join(' AND ')}`;
 
   const countR = await pool.query(`SELECT COUNT(*) FROM purchase ${where}`, values);
   const rowsR = await pool.query(
@@ -992,16 +1016,18 @@ app.get('/purchases/list', async (req, res) => {
   res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 
+// Una compra CONFIRMADA no se elimina directamente: hay que cancelarla primero
+// (eso ya revierte stock/pagos con historial completo). Una vez pendiente o
+// cancelada, "eliminar" solo la manda a la papelera por 30 días.
 app.delete('/purchases/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM purchase_item WHERE purchase_id=$1', [id]);
-    await pool.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
-    await pool.query('DELETE FROM supplier_account_movement WHERE purchase_id=$1', [id]);
-    await pool.query('UPDATE purchase_payment SET cash_movement_id=NULL WHERE purchase_id=$1', [id]);
-    await pool.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['PURCHASE', id]);
-    await pool.query('DELETE FROM purchase_payment WHERE purchase_id=$1', [id]);
-    await pool.query('DELETE FROM purchase WHERE id=$1', [id]);
+    const r = await pool.query('SELECT status FROM purchase WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Compra no encontrada.');
+    if (r.rows[0].status === 'CONFIRMED') {
+      throw new Error('Esta compra está confirmada. Cancelala primero (botón "Cancelar") y después vas a poder eliminarla.');
+    }
+    await pool.query('UPDATE purchase SET deleted_at=now() WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -1092,7 +1118,7 @@ app.post('/sales/:id/cancel', async (req, res) => {
 
 // ---------- PRESUPUESTOS ----------
 app.get('/quotes', async (req, res) => {
-  const r = await pool.query('SELECT * FROM quote ORDER BY id DESC');
+  const r = await pool.query('SELECT * FROM quote WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);
 });
 
@@ -1138,9 +1164,7 @@ app.post('/quotes', async (req, res) => {
 app.delete('/quotes/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('UPDATE sale SET quote_id=NULL WHERE quote_id=$1', [id]);
-    await pool.query('DELETE FROM quote_item WHERE quote_id=$1', [id]);
-    await pool.query('DELETE FROM quote WHERE id=$1', [id]);
+    await pool.query('UPDATE quote SET deleted_at=now() WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -1157,7 +1181,7 @@ app.post('/quotes/:id/cancel', async (req, res) => {
 });
 
 app.get('/sales', async (req, res) => {
-  const r = await pool.query('SELECT * FROM sale ORDER BY id DESC');
+  const r = await pool.query('SELECT * FROM sale WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);
 });
 
@@ -1244,13 +1268,13 @@ app.get('/sales/list', async (req, res) => {
   const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 25));
   const offset = (pageNum - 1) * pageSize;
 
-  const conditions = [];
+  const conditions = ['deleted_at IS NULL'];
   const values = [];
   let i = 1;
   if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
   if (date_from) { conditions.push(`date >= $${i++}`); values.push(date_from); }
   if (date_to) { conditions.push(`date < ($${i++}::date + interval '1 day')`); values.push(date_to); }
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const where = `WHERE ${conditions.join(' AND ')}`;
 
   const countR = await pool.query(`SELECT COUNT(*) FROM sale ${where}`, values);
   const rowsR = await pool.query(
@@ -1260,15 +1284,18 @@ app.get('/sales/list', async (req, res) => {
   res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 
+// Una venta CONFIRMADA no se elimina directamente: hay que cancelarla primero
+// (eso ya revierte stock/cobros con historial completo). Una vez pendiente o
+// cancelada, "eliminar" solo la manda a la papelera por 30 días.
 app.delete('/sales/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM sale_item WHERE sale_id=$1', [id]);
-    await pool.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', id]);
-    await pool.query('DELETE FROM customer_account_movement WHERE sale_id=$1', [id]);
-    await pool.query('DELETE FROM sale_collection WHERE sale_id=$1', [id]);
-    await pool.query('DELETE FROM cash_movement WHERE origin_type=$1 AND origin_id=$2', ['SALE', id]);
-    await pool.query('DELETE FROM sale WHERE id=$1', [id]);
+    const r = await pool.query('SELECT status FROM sale WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Venta no encontrada.');
+    if (r.rows[0].status === 'CONFIRMED') {
+      throw new Error('Esta venta está confirmada. Cancelala primero (botón "Cancelar") y después vas a poder eliminarla.');
+    }
+    await pool.query('UPDATE sale SET deleted_at=now() WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
