@@ -1542,6 +1542,7 @@ async function renderSales() {
               ${h.type === 'remito'
                 ? `<button class="btn btn-sm" onclick="openRemitoModal(${h.sale_id})">Volver a abrir</button>`
                 : `<button class="btn btn-sm" onclick="openComprobanteModal(${h.sale_id})">Volver a abrir</button>`}
+              <button class="btn btn-sm btn-danger" onclick="deleteDocumentLogEntry(${h.id})">Eliminar</button>
             </td>
           </tr>`, 'Todavía no se generó ningún comprobante ni remito en esta unidad.')}
       </div>`;
@@ -1843,6 +1844,16 @@ function waLink(phone, text) {
   return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
 }
 
+function formatCustomerAddress(customer) {
+  const parts = [];
+  if (customer.street) parts.push(`${customer.street}${customer.street_number ? ' ' + customer.street_number : ''}`);
+  if (customer.locality) parts.push(customer.locality);
+  if (customer.province) parts.push(customer.province);
+  if (customer.postal_code) parts.push(`CP ${customer.postal_code}`);
+  if (customer.country) parts.push(customer.country);
+  return parts.length ? parts.join(', ') : (customer.address || '');
+}
+
 function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, items }) {
   const isRemito = type === 'remito';
   const title = isRemito ? 'REMITO DE ENTREGA' : 'COMPROBANTE DE VENTA';
@@ -1940,13 +1951,7 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
         <div class="info-row"><strong>${customer.name}</strong></div>
         ${customer.tax_id ? `<div class="info-row">CUIT/Tax ID: ${customer.tax_id}</div>` : ''}
         ${(() => {
-          const parts = [];
-          if (customer.street) parts.push(`${customer.street}${customer.street_number ? ' ' + customer.street_number : ''}`);
-          if (customer.locality) parts.push(customer.locality);
-          if (customer.province) parts.push(customer.province);
-          if (customer.postal_code) parts.push(`CP ${customer.postal_code}`);
-          if (customer.country) parts.push(customer.country);
-          const full = parts.length ? parts.join(', ') : (customer.address || '');
+          const full = formatCustomerAddress(customer);
           return full ? `<div class="info-row">${full}</div>` : '';
         })()}
         ${customer.phone ? `<div class="info-row">Tel: ${customer.phone}</div>` : ''}
@@ -1973,6 +1978,10 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
     </div>` : ''}
 
     ${isRemito ? `
+    <div class="transport-box">
+      <div class="section-title">Lugar de entrega</div>
+      <div class="info-row">${sale.delivery_address || formatCustomerAddress(customer) || '—'}</div>
+    </div>
     <div class="transport-box">
       <div class="section-title">Transporte</div>
       <div class="info-row"><strong>Transportista:</strong> ${sale.carrier || '—'}</div>
@@ -2002,8 +2011,11 @@ async function openComprobanteModal(saleId) {
 
 async function openRemitoModal(saleId) {
   const data = await api(`/sales/${saleId}/full`);
+  const defaultAddress = data.sale.delivery_address || formatCustomerAddress(data.customer);
   openModal(`
     <h2>Datos de entrega — Remito Venta #${saleId}</h2>
+    <div class="field"><label>Lugar de entrega</label><input id="f_delivery_address" value="${escAttr(defaultAddress)}" placeholder="Dirección donde se entrega esta venta"></div>
+    <div class="hint" style="margin-top:-10px;margin-bottom:14px">Por defecto usa la dirección del cliente. Podés cambiarla si el envío va a otro lugar.</div>
     <div class="field"><label>Transportista</label><input id="f_carrier" value="${escAttr(data.sale.carrier)}" placeholder="Ej: Andreani, transporte propio…"></div>
     <div class="field"><label>Observaciones de entrega (opcional)</label><input id="f_delivery_notes" value="${escAttr(data.sale.delivery_notes)}"></div>
     <div class="modal-actions">
@@ -2019,6 +2031,7 @@ async function submitRemito(saleId) {
       body: JSON.stringify({
         carrier: document.getElementById('f_carrier').value,
         delivery_notes: document.getElementById('f_delivery_notes').value,
+        delivery_address: document.getElementById('f_delivery_address').value,
       }),
     });
     const data = await api(`/sales/${saleId}/full`);
@@ -2028,6 +2041,14 @@ async function submitRemito(saleId) {
     win.document.close();
     closeModal();
     api(`/sales/${saleId}/document-log`, { method: 'POST', body: JSON.stringify({ type: 'remito' }) }).catch(() => {});
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteDocumentLogEntry(id) {
+  if (!confirm('¿Eliminar este registro del historial? Esto no afecta la venta ni sus datos.')) return;
+  try {
+    await api(`/sales-documents/history/${id}`, { method: 'DELETE' });
+    toast('Registro eliminado del historial.');
+    renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 

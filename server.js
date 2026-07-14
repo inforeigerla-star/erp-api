@@ -1218,10 +1218,10 @@ app.get('/sales/:id/full', async (req, res) => {
 app.put('/sales/:id/transport', async (req, res) => {
   try {
     const { id } = req.params;
-    const { carrier, tracking_code, delivery_notes } = req.body;
+    const { carrier, tracking_code, delivery_notes, delivery_address } = req.body;
     const r = await pool.query(
-      'UPDATE sale SET carrier=$1, tracking_code=$2, delivery_notes=$3 WHERE id=$4 RETURNING *',
-      [carrier || null, tracking_code || null, delivery_notes || null, id]
+      'UPDATE sale SET carrier=$1, tracking_code=$2, delivery_notes=$3, delivery_address=$4 WHERE id=$5 RETURNING *',
+      [carrier || null, tracking_code || null, delivery_notes || null, delivery_address || null, id]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -1238,6 +1238,15 @@ app.post('/sales/:id/document-log', async (req, res) => {
       [id, type, req.user.id]
     );
     res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/sales-documents/history/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM sale_document_log WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
