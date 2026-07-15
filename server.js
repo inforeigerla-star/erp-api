@@ -1098,8 +1098,8 @@ app.get('/reports/pnl', async (req, res) => {
          COALESCE(SUM(amount) FILTER (WHERE type='INCOME'), 0) AS manual_income,
          COALESCE(SUM(amount) FILTER (WHERE type='EXPENSE'), 0) AS manual_expense
        FROM cash_movement
-       WHERE business_unit_id=$1 AND origin_type='MANUAL' AND created_at >= $2 AND created_at < ($3::date + interval '1 day')`,
-      [business_unit_id, date_from, date_to]
+       WHERE origin_type='MANUAL' AND created_at >= $1 AND created_at < ($2::date + interval '1 day')`,
+      [date_from, date_to]
     );
 
     const sales_total = Number(salesR.rows[0].total);

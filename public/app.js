@@ -327,11 +327,11 @@ async function renderReports() {
         <div style="margin-top:6px">${changeHtml(current.purchases_total, previous.purchases_total, true)}</div>
       </div>
       <div class="kpi">
-        <div class="kpi-label">Otros ingresos manuales</div>
+        <div class="kpi-label">Otros ingresos manuales (general)</div>
         <div class="kpi-value income">$ ${fmtMoney(current.manual_income)}</div>
       </div>
       <div class="kpi">
-        <div class="kpi-label">Gastos manuales</div>
+        <div class="kpi-label">Gastos manuales (general)</div>
         <div class="kpi-value expense">$ ${fmtMoney(current.manual_expense)}</div>
       </div>
     </div>
@@ -351,7 +351,7 @@ async function renderReports() {
               <td class="num">${changeHtml(current.net_result, previous.net_result, false)}</td></tr>
         </tbody>
       </table>
-      <div class="hint" style="margin-top:10px">Ventas y compras cuentan las confirmadas en el período por fecha de operación. Ingresos/gastos manuales son movimientos de caja cargados a mano (no ligados a una compra o venta).</div>
+      <div class="hint" style="margin-top:10px">Ventas y compras cuentan las confirmadas de esta unidad en el período. Los ingresos/gastos manuales de Caja son <strong>generales</strong> (compartidos entre todas las unidades, porque las cajas y sobres no son exclusivos de una sola empresa) — por eso muestran el mismo valor sin importar qué unidad tengas seleccionada arriba.</div>
     </div>
   `;
 }
