@@ -11,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'cambiar-este-secreto-en-produccion
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- AUTH MIDDLEWARE ----------
@@ -371,6 +371,34 @@ app.delete('/suppliers/:id', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+app.post('/suppliers/bulk-import', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { suppliers } = req.body;
+    if (!suppliers || !suppliers.length) throw new Error('No se recibieron proveedores para importar.');
+    await client.query('BEGIN');
+    let created = 0;
+    const errors = [];
+    for (const s of suppliers) {
+      try {
+        await client.query(
+          'INSERT INTO supplier (name, tax_id, phone, email, address) VALUES ($1,$2,$3,$4,$5)',
+          [s.name, s.tax_id || null, s.phone || null, s.email || null, s.address || null]
+        );
+        created++;
+      } catch (e) {
+        errors.push({ name: s.name, error: e.message });
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ created, failed: errors.length, errors: errors.slice(0, 50) });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 app.post('/customers', async (req, res) => {
   const { name, tax_id, phone, email, address, street, street_number, locality, province, country, postal_code } = req.body;
@@ -407,6 +435,36 @@ app.delete('/customers/:id', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+app.post('/customers/bulk-import', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { customers } = req.body;
+    if (!customers || !customers.length) throw new Error('No se recibieron clientes para importar.');
+    await client.query('BEGIN');
+    let created = 0;
+    const errors = [];
+    for (const c of customers) {
+      try {
+        await client.query(
+          `INSERT INTO customer (name, tax_id, phone, email, address, street, street_number, locality, province, country, postal_code)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [c.name, c.tax_id || null, c.phone || null, c.email || null, c.address || null,
+           c.street || null, c.street_number || null, c.locality || null, c.province || null, c.country || 'Argentina', c.postal_code || null]
+        );
+        created++;
+      } catch (e) {
+        errors.push({ name: c.name, error: e.message });
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ created, failed: errors.length, errors: errors.slice(0, 50) });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 // ---------- WAREHOUSES ----------
 app.post('/warehouses', async (req, res) => {
@@ -439,6 +497,31 @@ app.delete('/warehouses/:id', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+app.post('/warehouses/bulk-import', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { business_unit_id, warehouses } = req.body;
+    if (!warehouses || !warehouses.length) throw new Error('No se recibieron depósitos para importar.');
+    await client.query('BEGIN');
+    let created = 0;
+    const errors = [];
+    for (const w of warehouses) {
+      try {
+        await client.query('INSERT INTO warehouse (name, business_unit_id) VALUES ($1,$2)', [w.name, business_unit_id]);
+        created++;
+      } catch (e) {
+        errors.push({ name: w.name, error: e.message });
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ created, failed: errors.length, errors: errors.slice(0, 50) });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 // ---------- ARTICLES ----------
 app.post('/articles', async (req, res) => {
@@ -453,6 +536,66 @@ app.post('/articles', async (req, res) => {
 app.get('/articles', async (req, res) => {
   const r = await pool.query('SELECT * FROM article_price ORDER BY article_id');
   res.json(r.rows);
+});
+
+app.get('/articles/list', async (req, res) => {
+  const { business_unit_id, search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = [];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (search) {
+    conditions.push(`(code ILIKE $${i} OR alt_code ILIKE $${i} OR description ILIKE $${i})`);
+    values.push(`%${search}%`);
+    i++;
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM article_price ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT * FROM article_price ${where} ORDER BY article_id LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
+});
+
+app.post('/articles/bulk-import', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { business_unit_id, articles } = req.body;
+    if (!articles || !articles.length) throw new Error('No se recibieron artículos para importar.');
+    await client.query('BEGIN');
+    let created = 0;
+    const errors = [];
+    for (const a of articles) {
+      try {
+        await client.query(
+          `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [
+            business_unit_id, a.code, a.alt_code || null, a.description, a.list_cost || 0,
+            a.shipping_margin_pct || 0, a.fx_margin_pct || 0, a.profit_margin_pct || 0,
+            a.iva_pct != null ? a.iva_pct : 21, a.currency || 'ARS', a.notes || null,
+            a.price_ars || null, a.price_usd || null,
+          ]
+        );
+        created++;
+      } catch (e) {
+        errors.push({ code: a.code, error: e.message });
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ created, failed: errors.length, errors: errors.slice(0, 50) });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 app.delete('/articles/:id', async (req, res) => {

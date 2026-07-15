@@ -194,6 +194,12 @@ async function loadMasterData() {
   ]);
   state.cache = { suppliers, customers, warehouses, articles, projects, cashBoxes };
 }
+async function refreshSuppliers() { state.cache.suppliers = await api('/suppliers'); }
+async function refreshCustomers() { state.cache.customers = await api('/customers'); }
+async function refreshWarehouses() { state.cache.warehouses = await api('/warehouses'); }
+async function refreshArticles() { state.cache.articles = await api('/articles'); }
+async function refreshProjects() { state.cache.projects = await api('/projects'); }
+async function refreshCashBoxes() { state.cache.cashBoxes = await api('/cash-boxes'); }
 
 function whByBU() { return state.cache.warehouses.filter(w => w.business_unit_id === state.selectedBU); }
 function artByBU() { return state.cache.articles.filter(a => a.business_unit_id === state.selectedBU); }
@@ -629,6 +635,9 @@ async function deleteStockMovement(id, articleId, name) {
 // ---------------------------------------------------------
 // ARTÍCULOS
 // ---------------------------------------------------------
+let articlesPage = 1;
+let articlesSearch = '';
+
 async function renderArticles() {
   document.getElementById('viewActions').innerHTML = `
     <button class="btn btn-sm" onclick="downloadImportTemplate('articles')">Plantilla Excel</button>
@@ -636,9 +645,20 @@ async function renderArticles() {
     <button class="btn btn-sm btn-danger" id="bulkDeleteArticlesBtn" style="display:none" onclick="bulkDeleteArticles()">Eliminar seleccionados</button>
     <button class="btn btn-primary" onclick="newArticleModal()">+ Nuevo artículo</button>`;
   const el = document.getElementById('view');
-  const rows = artByBU();
+
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: articlesPage, limit: 50 });
+  if (articlesSearch) params.set('search', articlesSearch);
+  const { rows, total, limit } = await api(`/articles/list?${params.toString()}`);
+
   el.innerHTML = `
     <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Artículos</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="articlesSearchInput" value="${escAttr(articlesSearch)}" placeholder="Buscar por código o descripción…" style="width:260px" oninput="articlesSearchDebounced()">
+          ${articlesSearch ? `<button class="btn btn-sm" onclick="articlesClearSearch()">Limpiar</button>` : ''}
+        </div>
+      </div>
       <table class="ledger sortable-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
@@ -661,11 +681,33 @@ async function renderArticles() {
                 <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
               </td>
-            </tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">No hay artículos cargados en esta unidad.</div></td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">No hay artículos que coincidan.</div></td></tr>`}
         </tbody>
       </table>
+      ${total ? paginationControlsHtml('articles', articlesPage, total, limit) : ''}
     </div>
   `;
+  document.getElementById('articlesSearchInput')?.focus();
+  const input = document.getElementById('articlesSearchInput');
+  if (input) input.setSelectionRange(input.value.length, input.value.length);
+}
+let articlesSearchTimer = null;
+function articlesSearchDebounced() {
+  clearTimeout(articlesSearchTimer);
+  articlesSearchTimer = setTimeout(() => {
+    articlesSearch = document.getElementById('articlesSearchInput').value;
+    articlesPage = 1;
+    renderView();
+  }, 350);
+}
+function articlesClearSearch() {
+  articlesSearch = '';
+  articlesPage = 1;
+  renderView();
+}
+function articlesChangePage(page) {
+  articlesPage = page;
+  renderView();
 }
 function toggleAllArticleChecks(checkbox) {
   document.querySelectorAll('.article-check').forEach(c => c.checked = checkbox.checked);
@@ -689,7 +731,6 @@ async function bulkDeleteArticles() {
     try { await api(`/articles/${id}`, { method: 'DELETE' }); ok++; } catch (e) { failed++; }
   }
   toast(failed ? `Eliminados: ${ok}. Con errores: ${failed}.` : `${ok} artículo(s) eliminado(s).`, failed ? 'error' : 'success');
-  await loadMasterData();
   renderView();
 }
 
@@ -714,7 +755,7 @@ async function deleteArticle(id, code) {
   try {
     await api(`/articles/${id}`, { method: 'DELETE' });
     toast('Artículo eliminado.');
-    await loadMasterData(); renderView();
+    await refreshArticles(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -845,7 +886,7 @@ async function createArticle() {
         price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
       }),
     });
-    closeModal(); toast('Artículo creado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Artículo creado.'); await refreshArticles(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 async function submitEditArticle(id) {
@@ -867,7 +908,7 @@ async function submitEditArticle(id) {
         price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
       }),
     });
-    closeModal(); toast('Artículo actualizado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Artículo actualizado.'); await refreshArticles(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -914,7 +955,7 @@ function openEditWarehouseModal(id, name) {
 async function submitEditWarehouse(id) {
   try {
     await api(`/warehouses/${id}`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('f_edit_wh_name').value }) });
-    closeModal(); toast('Depósito actualizado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Depósito actualizado.'); await refreshWarehouses(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -963,7 +1004,7 @@ function newWarehouseModal() {
 async function createWarehouse() {
   try {
     await api('/warehouses', { method: 'POST', body: JSON.stringify({ name: document.getElementById('f_name').value, business_unit_id: state.selectedBU }) });
-    closeModal(); toast('Depósito creado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Depósito creado.'); await refreshWarehouses(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -972,10 +1013,15 @@ async function createWarehouse() {
 // ---------------------------------------------------------
 async function deleteEntity(kind, id, name) {
   if (!confirm(`¿Eliminar "${name}"? Esta acción no se puede deshacer.`)) return;
+  const REFRESH_BY_KIND = {
+    warehouses: refreshWarehouses, suppliers: refreshSuppliers, customers: refreshCustomers,
+    projects: refreshProjects, 'cash-boxes': refreshCashBoxes,
+  };
   try {
     await api(`/${kind}/${id}`, { method: 'DELETE' });
     toast('Eliminado correctamente.');
-    await loadMasterData();
+    if (REFRESH_BY_KIND[kind]) await REFRESH_BY_KIND[kind]();
+    else await loadMasterData();
     if (kind === 'business-units') await loadBusinessUnits();
     renderView();
   } catch (e) { toast(e.message, 'error'); }
@@ -1068,7 +1114,7 @@ async function submitEditContact(kind, id) {
       payload.address = document.getElementById('f_edit_address').value;
     }
     await api(`${endpoint}/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
-    closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} actualizado.`); await loadMasterData(); renderView();
+    closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} actualizado.`); await (kind === 'supplier' ? refreshSuppliers() : refreshCustomers()); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 function newContactModal(kind) {
@@ -1120,7 +1166,7 @@ async function createContact(kind) {
       payload.postal_code = document.getElementById('f_postal_code').value;
     }
     await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
-    closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} creado.`); await loadMasterData(); renderView();
+    closeModal(); toast(`${kind === 'supplier' ? 'Proveedor' : 'Cliente'} creado.`); await (kind === 'supplier' ? refreshSuppliers() : refreshCustomers()); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1157,7 +1203,7 @@ function openEditProjectModal(id, name) {
 async function submitEditProject(id) {
   try {
     await api(`/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('f_edit_proj_name').value }) });
-    closeModal(); toast('Proyecto actualizado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Proyecto actualizado.'); await refreshProjects(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 function newProjectModal() {
@@ -1173,7 +1219,7 @@ function newProjectModal() {
 async function createProject() {
   try {
     await api('/projects', { method: 'POST', body: JSON.stringify({ name: document.getElementById('f_name').value, business_unit_id: state.selectedBU }) });
-    closeModal(); toast('Proyecto creado.'); await loadMasterData(); renderView();
+    closeModal(); toast('Proyecto creado.'); await refreshProjects(); renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2697,9 +2743,9 @@ const IMPORT_TEMPLATES = {
     label: 'Artículos',
     headers: ['code', 'alt_code', 'description', 'list_cost', 'currency', 'shipping_margin_pct', 'fx_margin_pct', 'profit_margin_pct', 'iva_pct', 'price_ars', 'price_usd'],
     sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 'ARS', 5, 0, 30, 21, '', 25],
-    endpoint: '/articles',
+    bulkEndpoint: '/articles/bulk-import',
+    bulkKey: 'articles',
     buildPayload: (row) => ({
-      business_unit_id: state.selectedBU,
       code: row.code,
       alt_code: row.alt_code || '',
       description: row.description,
@@ -2717,22 +2763,29 @@ const IMPORT_TEMPLATES = {
     label: 'Depósitos',
     headers: ['name'],
     sample: ['Depósito Central'],
-    endpoint: '/warehouses',
-    buildPayload: (row) => ({ business_unit_id: state.selectedBU, name: row.name }),
+    bulkEndpoint: '/warehouses/bulk-import',
+    bulkKey: 'warehouses',
+    buildPayload: (row) => ({ name: row.name }),
   },
   suppliers: {
     label: 'Proveedores',
     headers: ['name', 'tax_id', 'phone', 'email', 'address'],
     sample: ['Proveedor SA', '30-12345678-9', '11-5555-5555', 'contacto@proveedor.com', 'Calle Falsa 123'],
-    endpoint: '/suppliers',
+    bulkEndpoint: '/suppliers/bulk-import',
+    bulkKey: 'suppliers',
     buildPayload: (row) => ({ name: row.name, tax_id: row.tax_id || '', phone: row.phone || '', email: row.email || '', address: row.address || '' }),
   },
   customers: {
     label: 'Clientes',
-    headers: ['name', 'tax_id', 'phone', 'email', 'address'],
-    sample: ['Cliente SRL', '30-98765432-1', '11-4444-4444', 'contacto@cliente.com', 'Av. Siempreviva 742'],
-    endpoint: '/customers',
-    buildPayload: (row) => ({ name: row.name, tax_id: row.tax_id || '', phone: row.phone || '', email: row.email || '', address: row.address || '' }),
+    headers: ['name', 'tax_id', 'phone', 'email', 'address', 'street', 'street_number', 'locality', 'province', 'country', 'postal_code'],
+    sample: ['Cliente SRL', '30-98765432-1', '11-4444-4444', 'contacto@cliente.com', '', 'Av. Siempreviva', '742', 'Córdoba', 'Córdoba', 'Argentina', '5000'],
+    bulkEndpoint: '/customers/bulk-import',
+    bulkKey: 'customers',
+    buildPayload: (row) => ({
+      name: row.name, tax_id: row.tax_id || '', phone: row.phone || '', email: row.email || '', address: row.address || '',
+      street: row.street || '', street_number: row.street_number || '', locality: row.locality || '',
+      province: row.province || '', country: row.country || 'Argentina', postal_code: row.postal_code || '',
+    }),
   },
 };
 
@@ -2762,29 +2815,28 @@ async function handleImportFile(kind, file) {
 
     if (!rows.length) { toast('El archivo no tiene filas para importar.', 'error'); return; }
 
-    let ok = 0, failed = 0;
-    const errors = [];
-    for (const row of rows) {
+    const payloadRows = rows.map(row => {
       const normalized = {};
       Object.keys(row).forEach(k => { normalized[k.trim().toLowerCase()] = row[k]; });
-      try {
-        await api(tpl.endpoint, { method: 'POST', body: JSON.stringify(tpl.buildPayload(normalized)) });
-        ok++;
-      } catch (e) {
-        failed++;
-        errors.push(`${normalized.name || normalized.code || '(fila sin nombre)'}: ${e.message}`);
-      }
-    }
-    await loadMasterData();
+      return tpl.buildPayload(normalized);
+    });
+
+    toast(`Importando ${payloadRows.length} registros, un momento…`);
+
+    const body = { [tpl.bulkKey]: payloadRows };
+    if (kind === 'articles' || kind === 'warehouses') body.business_unit_id = state.selectedBU;
+
+    const result = await api(tpl.bulkEndpoint, { method: 'POST', body: JSON.stringify(body) });
+
     renderView();
-    if (failed === 0) {
-      toast(`Importación completa: ${ok} registros creados.`);
+    if (result.failed === 0) {
+      toast(`Importación completa: ${result.created} registros creados.`);
     } else {
-      toast(`Importado: ${ok} — Con errores: ${failed}. Revisá nombres/códigos duplicados.`, 'error');
-      console.warn('Errores de importación:', errors);
+      toast(`Importado: ${result.created} — Con errores: ${result.failed}. Revisá códigos/nombres duplicados.`, 'error');
+      console.warn('Errores de importación:', result.errors);
     }
   } catch (e) {
-    toast('No se pudo leer el archivo. Verificá que sea un Excel válido.', 'error');
+    toast(e.message || 'No se pudo leer el archivo. Verificá que sea un Excel válido.', 'error');
   }
 }
 
@@ -2821,7 +2873,7 @@ async function submitNewCashBox(kind) {
     });
     closeModal();
     toast(`${kind === 'SOBRE' ? 'Sobre' : 'Caja'} creado.`);
-    await loadMasterData();
+    await refreshCashBoxes();
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2831,7 +2883,7 @@ async function deleteCashBox(id, name) {
   try {
     await api(`/cash-boxes/${id}`, { method: 'DELETE' });
     toast('Eliminado correctamente.');
-    await loadMasterData();
+    await refreshCashBoxes();
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
