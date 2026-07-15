@@ -1765,11 +1765,16 @@ async function submitCollect(saleId) {
 }
 
 function opActions(kind, op) {
-  if (op.status !== 'PENDING') return '-';
-  return `
-    <button class="btn btn-sm" onclick="confirmOperation('${kind}', ${op.id})">Confirmar</button>
-    <button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>
-  `;
+  if (op.status === 'PENDING') {
+    return `
+      <button class="btn btn-sm" onclick="confirmOperation('${kind}', ${op.id})">Confirmar</button>
+      <button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>
+    `;
+  }
+  if (op.status === 'CONFIRMED') {
+    return `<button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>`;
+  }
+  return '-';
 }
 async function confirmOperation(kind, id) {
   try {
