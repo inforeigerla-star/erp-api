@@ -836,6 +836,7 @@ function newArticleModal() {
       <button class="btn btn-primary" onclick="createArticle()">Guardar</button>
     </div>
   `);
+  bindPricePreviewListeners();
   updatePricePreview();
 }
 
@@ -850,17 +851,20 @@ function openEditArticleModal(articleId) {
       <button class="btn btn-primary" onclick="submitEditArticle(${a.article_id})">Guardar</button>
     </div>
   `);
+  bindPricePreviewListeners();
   updatePricePreview();
+}
+function bindPricePreviewListeners() {
+  ['f_cost', 'f_ship', 'f_fx', 'f_profit', 'f_iva', 'f_currency'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', updatePricePreview);
+      el.addEventListener('change', updatePricePreview);
+      el.addEventListener('keyup', updatePricePreview);
+    }
+  });
 }
 
-function onCurrencyChanged() {
-  const costField = document.getElementById('f_cost');
-  if (Number(costField.value) > 0) {
-    const clear = confirm('El costo de lista actual está en la moneda anterior. ¿Querés borrarlo para volver a escribirlo en la nueva moneda?');
-    if (clear) costField.value = '';
-  }
-  updatePricePreview();
-}
 function updatePricePreview() {
   const cost = Number(document.getElementById('f_cost').value) || 0;
   const ship = Number(document.getElementById('f_ship').value) || 0;
