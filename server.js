@@ -525,13 +525,27 @@ app.post('/warehouses/bulk-import', async (req, res) => {
 
 // ---------- ARTICLES ----------
 app.post('/articles', async (req, res) => {
-  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency } = req.body;
+  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
   const r = await pool.query(
-    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS']
+    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null]
   );
   res.json(r.rows[0]);
+});
+app.put('/articles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
+    const r = await pool.query(
+      `UPDATE article SET code=$1, alt_code=$2, description=$3, list_cost=$4, shipping_margin_pct=$5, fx_margin_pct=$6, profit_margin_pct=$7, iva_pct=$8, currency=$9, notes=$10, price_ars=$11, price_usd=$12
+       WHERE id=$13 RETURNING *`,
+      [code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 app.get('/articles', async (req, res) => {
   const r = await pool.query('SELECT * FROM article_price ORDER BY article_id');
