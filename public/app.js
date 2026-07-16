@@ -739,7 +739,10 @@ function articlePriceFor(a, targetCurrency, withIva) {
   if (manual != null) {
     return withIva ? manual * (1 + Number(a.iva_pct) / 100) : Number(manual);
   }
-  return withIva ? Number(a.final_price_with_iva) : Number(a.final_price);
+  if (a.currency === targetCurrency) {
+    return withIva ? Number(a.final_price_with_iva) : Number(a.final_price);
+  }
+  return null;
 }
 function articlePriceDisplay(a, targetCurrency, withIva) {
   const price = articlePriceFor(a, targetCurrency, withIva);
@@ -794,35 +797,16 @@ function articleFormHtml(a) {
 
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
       <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
-      <div class="hint" style="margin-bottom:10px">El costo de lista y los márgenes/IVA se aplican por igual en las dos monedas (no hay conversión automática entre ARS y USD).</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div>
-          <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Pesos (ARS)</div>
-          <table class="ledger">
-            <tbody>
-              <tr><td>Costo de lista</td><td class="num" id="pv_cost_ars">$ 0,00</td></tr>
-              <tr><td>+ Envío</td><td class="num" id="pv_ship_ars">$ 0,00</td></tr>
-              <tr><td>+ Tipo de cambio</td><td class="num" id="pv_fx_ars">$ 0,00</td></tr>
-              <tr><td>+ Ganancia</td><td class="num" id="pv_profit_ars">$ 0,00</td></tr>
-              <tr><td><strong>Sin IVA</strong></td><td class="num income" id="pv_final_ars"><strong>$ 0,00</strong></td></tr>
-              <tr><td><strong>Con IVA</strong></td><td class="num income" id="pv_final_iva_ars"><strong>$ 0,00</strong></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Dólares (USD)</div>
-          <table class="ledger">
-            <tbody>
-              <tr><td>Costo de lista</td><td class="num" id="pv_cost_usd">US$ 0,00</td></tr>
-              <tr><td>+ Envío</td><td class="num" id="pv_ship_usd">US$ 0,00</td></tr>
-              <tr><td>+ Tipo de cambio</td><td class="num" id="pv_fx_usd">US$ 0,00</td></tr>
-              <tr><td>+ Ganancia</td><td class="num" id="pv_profit_usd">US$ 0,00</td></tr>
-              <tr><td><strong>Sin IVA</strong></td><td class="num income" id="pv_final_usd"><strong>US$ 0,00</strong></td></tr>
-              <tr><td><strong>Con IVA</strong></td><td class="num income" id="pv_final_iva_usd"><strong>US$ 0,00</strong></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <table class="ledger">
+        <tbody>
+          <tr><td>Costo de lista</td><td class="num" id="pv_cost">$ 0,00</td></tr>
+          <tr><td>+ Envío</td><td class="num" id="pv_ship">$ 0,00</td></tr>
+          <tr><td>+ Tipo de cambio</td><td class="num" id="pv_fx">$ 0,00</td></tr>
+          <tr><td>+ Ganancia</td><td class="num" id="pv_profit">$ 0,00</td></tr>
+          <tr><td><strong>Precio sin IVA</strong></td><td class="num income" id="pv_final"><strong>$ 0,00</strong></td></tr>
+          <tr><td><strong>Precio con IVA</strong></td><td class="num income" id="pv_final_iva"><strong>$ 0,00</strong></td></tr>
+        </tbody>
+      </table>
     </div>
   `;
 }
@@ -871,22 +855,20 @@ function updatePricePreview() {
   const fx = Number(document.getElementById('f_fx').value) || 0;
   const profit = Number(document.getElementById('f_profit').value) || 0;
   const iva = Number(document.getElementById('f_iva').value) || 0;
+  const currency = document.getElementById('f_currency').value;
+  const sym = currency === 'USD' ? 'US$' : '$';
 
   const afterShip = cost * (1 + ship / 100);
   const afterFx = afterShip * (1 + fx / 100);
   const final = afterFx * (1 + profit / 100);
   const finalIva = final * (1 + iva / 100);
 
-  const fillFor = (suffix, sym) => {
-    document.getElementById(`pv_cost_${suffix}`).textContent = `${sym} ${fmtMoney(cost)}`;
-    document.getElementById(`pv_ship_${suffix}`).textContent = `${sym} ${fmtMoney(afterShip - cost)}`;
-    document.getElementById(`pv_fx_${suffix}`).textContent = `${sym} ${fmtMoney(afterFx - afterShip)}`;
-    document.getElementById(`pv_profit_${suffix}`).textContent = `${sym} ${fmtMoney(final - afterFx)}`;
-    document.getElementById(`pv_final_${suffix}`).innerHTML = `<strong>${sym} ${fmtMoney(final)}</strong>`;
-    document.getElementById(`pv_final_iva_${suffix}`).innerHTML = `<strong>${sym} ${fmtMoney(finalIva)}</strong>`;
-  };
-  fillFor('ars', '$');
-  fillFor('usd', 'US$');
+  document.getElementById('pv_cost').textContent = `${sym} ${fmtMoney(cost)}`;
+  document.getElementById('pv_ship').textContent = `${sym} ${fmtMoney(afterShip - cost)}`;
+  document.getElementById('pv_fx').textContent = `${sym} ${fmtMoney(afterFx - afterShip)}`;
+  document.getElementById('pv_profit').textContent = `${sym} ${fmtMoney(final - afterFx)}`;
+  document.getElementById('pv_final').innerHTML = `<strong>${sym} ${fmtMoney(final)}</strong>`;
+  document.getElementById('pv_final_iva').innerHTML = `<strong>${sym} ${fmtMoney(finalIva)}</strong>`;
 }
 async function createArticle() {
   try {
