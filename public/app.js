@@ -897,8 +897,13 @@ function newArticleModal() {
   updatePricePreview();
 }
 
-function openEditArticleModal(articleId) {
-  const a = state.cache.articles.find(x => x.article_id === articleId);
+async function openEditArticleModal(articleId) {
+  let a = state.cache.articles.find(x => x.article_id === articleId);
+  if (!a) {
+    // El caché puede estar desactualizado (ej: recién importado); reintentar tras refrescar.
+    await refreshArticles();
+    a = state.cache.articles.find(x => x.article_id === articleId);
+  }
   if (!a) { toast('No se encontró el artículo.', 'error'); return; }
   window._articlePricing = articlePricingDataFrom(a);
   _articleCurrentCurrency = 'ARS';
@@ -2922,6 +2927,8 @@ async function handleImportFile(kind, file) {
 
     const result = await api(tpl.bulkEndpoint, { method: 'POST', body: JSON.stringify(body) });
 
+    const REFRESH_BY_KIND = { articles: refreshArticles, warehouses: refreshWarehouses, suppliers: refreshSuppliers, customers: refreshCustomers };
+    if (REFRESH_BY_KIND[kind]) await REFRESH_BY_KIND[kind]();
     renderView();
     const createdMsg = result.created ? `${result.created} creados` : '';
     const updatedMsg = result.updated ? `${result.updated} actualizados` : '';
