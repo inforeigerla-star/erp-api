@@ -436,6 +436,33 @@ table.ledger tr:hover td { background: #FAFAFA; }
 
 /* ---------- TOASTS ---------- */
 .toast-stack { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+
+.working-indicator {
+  position: fixed;
+  bottom: 22px;
+  right: 22px;
+  z-index: 200;
+  background: var(--ink);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: var(--shadow-lg);
+}
+.working-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: working-spin 0.7s linear infinite;
+}
+@keyframes working-spin { to { transform: rotate(360deg); } }
 .toast {
   background: var(--sidebar);
   color: #fff;

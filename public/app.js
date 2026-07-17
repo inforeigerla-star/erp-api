@@ -65,20 +65,27 @@ function doLogout() {
 // ---------------------------------------------------------
 async function api(path, opts = {}) {
   const token = getToken();
-  const res = await fetch(path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    ...opts,
-  });
-  if (res.status === 401) {
-    doLogout();
-    throw new Error('Sesión expirada. Volvé a ingresar.');
+  let shown = false;
+  const delayTimer = setTimeout(() => { shown = true; showWorking(); }, 400);
+  try {
+    const res = await fetch(path, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...opts,
+    });
+    if (res.status === 401) {
+      doLogout();
+      throw new Error('Sesión expirada. Volvé a ingresar.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Error de red');
+    return data;
+  } finally {
+    clearTimeout(delayTimer);
+    if (shown) hideWorking();
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Error de red');
-  return data;
 }
 
 // ---------------------------------------------------------
@@ -91,6 +98,20 @@ function toast(msg, type = 'success') {
   el.textContent = msg;
   stack.appendChild(el);
   setTimeout(() => el.remove(), 3800);
+}
+
+let _workingDepth = 0;
+function showWorking(text) {
+  _workingDepth++;
+  const el = document.getElementById('workingIndicator');
+  document.getElementById('workingIndicatorText').textContent = text || 'Trabajando…';
+  el.style.display = 'flex';
+}
+function hideWorking() {
+  _workingDepth = Math.max(0, _workingDepth - 1);
+  if (_workingDepth === 0) {
+    document.getElementById('workingIndicator').style.display = 'none';
+  }
 }
 
 // ---------------------------------------------------------
@@ -730,9 +751,12 @@ async function bulkDeleteArticles() {
   if (!confirm(`¿Eliminar ${ids.length} artículo(s)? Esta acción no se puede deshacer.`)) return;
   if (!(await verifyPasswordPrompt(`eliminar ${ids.length} artículos`))) return;
   let ok = 0, failed = 0;
+  showWorking(`Eliminando artículos… (0/${ids.length})`);
   for (const id of ids) {
     try { await api(`/articles/${id}`, { method: 'DELETE' }); ok++; } catch (e) { failed++; }
+    document.getElementById('workingIndicatorText').textContent = `Eliminando artículos… (${ok + failed}/${ids.length})`;
   }
+  hideWorking();
   toast(failed ? `Eliminados: ${ok}. Con errores: ${failed}.` : `${ok} artículo(s) eliminado(s).`, failed ? 'error' : 'success');
   renderView();
 }
