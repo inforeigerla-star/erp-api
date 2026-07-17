@@ -2301,7 +2301,7 @@ function newOperationModal(kind) {
       </div>
     </div>` : ''}
     <div class="field"><label>Forma de pago</label>
-      <select id="f_payment" onchange="togglePaymentBoxField()">
+      <select id="f_payment" onchange="togglePaymentBoxField(${isPurchase})">
         <option value="CASH">Contado</option>
         <option value="ACCOUNT">Cuenta corriente</option>
         ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
@@ -2311,7 +2311,7 @@ function newOperationModal(kind) {
       <label>Caja o sobre de destino</label>
       ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…')}
     </div>
-    <div class="hint" style="margin-top:-10px;margin-bottom:14px">La caja o sobre de destino se elige después, al procesar el ${isPurchase ? 'pago de esta compra' : 'cobro de esta venta'}.</div>
+    <div class="hint" id="paymentBoxHint" style="margin-top:-10px;margin-bottom:14px">${isPurchase ? 'La caja o sobre de destino se elige después, al procesar el pago de esta compra.' : ''}</div>
 
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
@@ -2330,6 +2330,7 @@ function newOperationModal(kind) {
       <button class="btn btn-primary" onclick="createOperation('${kind}')">Guardar</button>
     </div>
   `);
+  togglePaymentBoxField(isPurchase);
   addLineItem(kind);
 }
 let totalManuallyEdited = false;
@@ -2351,8 +2352,20 @@ function recalcLineItemsTotal() {
   if (overrideField) overrideField.value = total.toFixed(2);
 }
 
-function togglePaymentBoxField() {
-  document.getElementById('paymentBoxField').style.display = 'none';
+function togglePaymentBoxField(isPurchase) {
+  const payment = document.getElementById('f_payment').value;
+  const field = document.getElementById('paymentBoxField');
+  const hint = document.getElementById('paymentBoxHint');
+  if (isPurchase) {
+    field.style.display = 'none';
+    hint.textContent = 'La caja o sobre de destino se elige después, al procesar el pago de esta compra.';
+  } else if (payment === 'CASH') {
+    field.style.display = 'block';
+    hint.textContent = '';
+  } else {
+    field.style.display = 'none';
+    hint.textContent = 'La caja o sobre de destino se elige después, al procesar el cobro de esta venta.';
+  }
 }
 
 function addLineItem(kind) {
@@ -2455,7 +2468,7 @@ async function createOperation(kind) {
     warehouse_id: Number(getSearchableValue('warehouse')),
     project_id: getSearchableValue('project') ? Number(getSearchableValue('project')) : null,
     payment_type: document.getElementById('f_payment').value,
-    cash_box_id: null,
+    cash_box_id: (!isPurchase && document.getElementById('f_payment').value === 'CASH') ? Number(getSearchableValue('cashbox')) : null,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));
