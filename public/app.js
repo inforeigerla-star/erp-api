@@ -1654,10 +1654,12 @@ async function renderSales() {
   const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
 
   const tabsHtml = `
-    <div style="display:flex;gap:8px;margin-bottom:18px">
-      <button class="btn btn-sm ${salesSubTab === 'sales' ? 'btn-primary' : ''}" onclick="switchSalesTab('sales')">Ventas</button>
-      <button class="btn btn-sm ${salesSubTab === 'collect' ? 'btn-primary' : ''}" onclick="switchSalesTab('collect')">Procesar cobro ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
-      <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm ${salesSubTab === 'sales' ? 'btn-primary' : ''}" onclick="switchSalesTab('sales')">Ventas</button>
+        <button class="btn btn-sm ${salesSubTab === 'collect' ? 'btn-primary' : ''}" onclick="switchSalesTab('collect')">Procesar cobro ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
+        <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+      </div>
       <button class="btn btn-sm ${salesSubTab === 'documents' ? 'btn-primary' : ''}" onclick="switchSalesTab('documents')">Comprobantes y remitos</button>
     </div>`;
 
