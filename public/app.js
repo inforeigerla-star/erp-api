@@ -513,7 +513,8 @@ async function renderStock() {
           <td>${s.warehouse_name}</td>
           <td class="num">${fmtQty(s.quantity)}</td>
           <td>
-            <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Kardex</button>
+            <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Historia</button>
+            <button class="btn btn-sm" onclick="quickAddStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Agregar unidades</button>
             <button class="btn btn-sm btn-danger" onclick="quickRemoveStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Quitar unidades</button>
             <button class="btn btn-sm btn-danger" onclick="deleteStockRow(${s.id}, '${s.description.replace(/'/g, "\\'")}')">Eliminar registro</button>
           </td>
@@ -602,6 +603,21 @@ async function submitStockAdjust() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function quickAddStock(articleId, warehouseId, name, currentQty) {
+  const input = prompt(`Cantidad a agregar de "${name}" (actual: ${fmtQty(currentQty)}):`);
+  if (input === null) return;
+  const qty = Number(input);
+  if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
+  if (!(await verifyPasswordPrompt('agregar unidades de stock'))) return;
+  try {
+    await api('/stock/adjust', {
+      method: 'POST',
+      body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'IN' }),
+    });
+    toast('Unidades agregadas al stock.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
 async function quickRemoveStock(articleId, warehouseId, name, currentQty) {
   const input = prompt(`Cantidad a quitar de "${name}" (disponible: ${fmtQty(currentQty)}):`);
   if (input === null) return;
