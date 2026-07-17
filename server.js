@@ -525,22 +525,48 @@ app.post('/warehouses/bulk-import', async (req, res) => {
 
 // ---------- ARTICLES ----------
 app.post('/articles', async (req, res) => {
-  const { business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
+  const {
+    business_unit_id, code, alt_code, description, notes,
+    list_cost_ars, shipping_margin_pct_ars, fx_margin_pct_ars, profit_margin_pct_ars, iva_pct_ars,
+    list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
+    price_ars, price_usd,
+  } = req.body;
   const r = await pool.query(
-    `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [business_unit_id, code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null]
+    `INSERT INTO article (business_unit_id, code, alt_code, description, notes,
+       list_cost_ars, shipping_margin_pct_ars, fx_margin_pct_ars, profit_margin_pct_ars, iva_pct_ars,
+       list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
+       price_ars, price_usd)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+    [
+      business_unit_id, code, alt_code || null, description, notes || null,
+      list_cost_ars || 0, shipping_margin_pct_ars || 0, fx_margin_pct_ars || 0, profit_margin_pct_ars || 0, iva_pct_ars != null ? iva_pct_ars : 21,
+      list_cost_usd || 0, shipping_margin_pct_usd || 0, fx_margin_pct_usd || 0, profit_margin_pct_usd || 0, iva_pct_usd != null ? iva_pct_usd : 21,
+      price_ars || null, price_usd || null,
+    ]
   );
   res.json(r.rows[0]);
 });
 app.put('/articles/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd } = req.body;
+    const {
+      code, alt_code, description, notes,
+      list_cost_ars, shipping_margin_pct_ars, fx_margin_pct_ars, profit_margin_pct_ars, iva_pct_ars,
+      list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
+      price_ars, price_usd,
+    } = req.body;
     const r = await pool.query(
-      `UPDATE article SET code=$1, alt_code=$2, description=$3, list_cost=$4, shipping_margin_pct=$5, fx_margin_pct=$6, profit_margin_pct=$7, iva_pct=$8, currency=$9, notes=$10, price_ars=$11, price_usd=$12
-       WHERE id=$13 RETURNING *`,
-      [code, alt_code || null, description, list_cost, shipping_margin_pct || 0, fx_margin_pct || 0, profit_margin_pct || 0, iva_pct != null ? iva_pct : 21, currency || 'ARS', notes || null, price_ars || null, price_usd || null, id]
+      `UPDATE article SET code=$1, alt_code=$2, description=$3, notes=$4,
+         list_cost_ars=$5, shipping_margin_pct_ars=$6, fx_margin_pct_ars=$7, profit_margin_pct_ars=$8, iva_pct_ars=$9,
+         list_cost_usd=$10, shipping_margin_pct_usd=$11, fx_margin_pct_usd=$12, profit_margin_pct_usd=$13, iva_pct_usd=$14,
+         price_ars=$15, price_usd=$16
+       WHERE id=$17 RETURNING *`,
+      [
+        code, alt_code || null, description, notes || null,
+        list_cost_ars || 0, shipping_margin_pct_ars || 0, fx_margin_pct_ars || 0, profit_margin_pct_ars || 0, iva_pct_ars != null ? iva_pct_ars : 21,
+        list_cost_usd || 0, shipping_margin_pct_usd || 0, fx_margin_pct_usd || 0, profit_margin_pct_usd || 0, iva_pct_usd != null ? iva_pct_usd : 21,
+        price_ars || null, price_usd || null, id,
+      ]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -588,12 +614,15 @@ app.post('/articles/bulk-import', async (req, res) => {
     for (const a of articles) {
       try {
         await client.query(
-          `INSERT INTO article (business_unit_id, code, alt_code, description, list_cost, shipping_margin_pct, fx_margin_pct, profit_margin_pct, iva_pct, currency, notes, price_ars, price_usd)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          `INSERT INTO article (business_unit_id, code, alt_code, description, notes,
+             list_cost_ars, shipping_margin_pct_ars, fx_margin_pct_ars, profit_margin_pct_ars, iva_pct_ars,
+             list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
+             price_ars, price_usd)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
           [
-            business_unit_id, a.code, a.alt_code || null, a.description, a.list_cost || 0,
-            a.shipping_margin_pct || 0, a.fx_margin_pct || 0, a.profit_margin_pct || 0,
-            a.iva_pct != null ? a.iva_pct : 21, a.currency || 'ARS', a.notes || null,
+            business_unit_id, a.code, a.alt_code || null, a.description, a.notes || null,
+            a.list_cost_ars || 0, a.shipping_margin_pct_ars || 0, a.fx_margin_pct_ars || 0, a.profit_margin_pct_ars || 0, a.iva_pct_ars != null ? a.iva_pct_ars : 21,
+            a.list_cost_usd || 0, a.shipping_margin_pct_usd || 0, a.fx_margin_pct_usd || 0, a.profit_margin_pct_usd || 0, a.iva_pct_usd != null ? a.iva_pct_usd : 21,
             a.price_ars || null, a.price_usd || null,
           ]
         );

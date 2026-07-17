@@ -92,7 +92,7 @@ async function run() {
   await step('Crear artículo de prueba', async () => {
     const r = await api('/articles', {
       method: 'POST',
-      body: JSON.stringify({ business_unit_id: created.businessUnitId, code: `SMOKE-${stamp}`, description: 'Artículo de prueba', list_cost: 100 }),
+      body: JSON.stringify({ business_unit_id: created.businessUnitId, code: `SMOKE-${stamp}`, description: 'Artículo de prueba', list_cost_ars: 100 }),
     });
     created.articleId = r.id;
   });
@@ -194,8 +194,14 @@ async function run() {
   });
 
   console.log('\n6. Limpieza (borrando todo lo de prueba)');
-  await step('Eliminar venta de prueba', async () => { await api(`/sales/${created.saleId}`, { method: 'DELETE' }); });
-  await step('Eliminar compra de prueba', async () => { await api(`/purchases/${created.purchaseId}`, { method: 'DELETE' }); });
+  await step('Cancelar y eliminar venta de prueba', async () => {
+    await api(`/sales/${created.saleId}/cancel`, { method: 'POST' });
+    await api(`/sales/${created.saleId}`, { method: 'DELETE' });
+  });
+  await step('Cancelar y eliminar compra de prueba', async () => {
+    await api(`/purchases/${created.purchaseId}/cancel`, { method: 'POST' });
+    await api(`/purchases/${created.purchaseId}`, { method: 'DELETE' });
+  });
   await step('Eliminar artículo, depósito, proveedor, cliente y unidad de prueba (papelera)', async () => {
     await api(`/articles/${created.articleId}`, { method: 'DELETE' });
     await api(`/warehouses/${created.warehouseId}`, { method: 'DELETE' });
@@ -204,11 +210,15 @@ async function run() {
     await api(`/business-units/${created.businessUnitId}`, { method: 'DELETE' });
   });
   await step('Purgar definitivamente de la papelera (no dejar residuos)', async () => {
+    await api(`/trash/sales/${created.saleId}`, { method: 'DELETE' });
+    await api(`/trash/purchases/${created.purchaseId}`, { method: 'DELETE' });
     await api(`/trash/articles/${created.articleId}`, { method: 'DELETE' });
     await api(`/trash/warehouses/${created.warehouseId}`, { method: 'DELETE' });
     await api(`/trash/suppliers/${created.supplierId}`, { method: 'DELETE' });
     await api(`/trash/customers/${created.customerId}`, { method: 'DELETE' });
-    await api(`/trash/business-units/${created.businessUnitId}`, { method: 'DELETE' });
+    // La unidad de negocio de prueba queda en la papelera (tiene movimientos de
+    // caja reales por la prueba) y se autolimpia sola a los 30 días — no se
+    // fuerza su purga para no arriesgar historial financiero real por error.
   });
 
   console.log(`\n${'─'.repeat(50)}`);

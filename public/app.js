@@ -662,7 +662,7 @@ async function renderArticles() {
       <table class="ledger sortable-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
-          ${['Código', 'Cód. alt.', 'Descripción', 'Costo lista', 'Precio ARS (c/IVA)', 'Precio USD (s/IVA)', 'Obs.', ''].map(h => h
+          ${['Código', 'Cód. alt.', 'Descripción', 'Costo ARS', 'Costo USD', 'Precio ARS (c/IVA)', 'Precio USD (s/IVA)', 'Obs.', ''].map(h => h
             ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>`
             : `<th></th>`).join('')}
         </tr></thead>
@@ -673,7 +673,8 @@ async function renderArticles() {
               <td class="mono">${a.code}</td>
               <td class="mono">${a.alt_code || '-'}</td>
               <td>${a.description}</td>
-              <td class="num">${a.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(a.list_cost)}</td>
+              <td class="num">$ ${fmtMoney(a.list_cost_ars)}</td>
+              <td class="num">US$ ${fmtMoney(a.list_cost_usd)}</td>
               <td class="num income">${articlePriceDisplay(a, 'ARS', true)}</td>
               <td class="num income">${articlePriceDisplay(a, 'USD', false)}</td>
               <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
@@ -681,7 +682,7 @@ async function renderArticles() {
                 <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
               </td>
-            </tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">No hay artículos que coincidan.</div></td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="10"><div class="empty-state">No hay artículos que coincidan.</div></td></tr>`}
         </tbody>
       </table>
       ${total ? paginationControlsHtml('articles', articlesPage, total, limit) : ''}
@@ -737,12 +738,13 @@ async function bulkDeleteArticles() {
 function articlePriceFor(a, targetCurrency, withIva) {
   const manual = targetCurrency === 'USD' ? a.price_usd : a.price_ars;
   if (manual != null) {
-    return withIva ? manual * (1 + Number(a.iva_pct) / 100) : Number(manual);
+    const ivaPct = targetCurrency === 'USD' ? a.iva_pct_usd : a.iva_pct_ars;
+    return withIva ? manual * (1 + Number(ivaPct) / 100) : Number(manual);
   }
-  if (a.currency === targetCurrency) {
-    return withIva ? Number(a.final_price_with_iva) : Number(a.final_price);
+  if (targetCurrency === 'USD') {
+    return withIva ? Number(a.final_price_usd_with_iva) : Number(a.final_price_usd);
   }
-  return null;
+  return withIva ? Number(a.final_price_ars_with_iva) : Number(a.final_price_ars);
 }
 function articlePriceDisplay(a, targetCurrency, withIva) {
   const price = articlePriceFor(a, targetCurrency, withIva);
@@ -763,40 +765,37 @@ function escAttr(str) {
   return String(str ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 function articleFormHtml(a) {
-  const isEdit = !!a;
   return `
     <div class="field-row">
       <div class="field"><label>Código</label><input id="f_code" placeholder="ART001" value="${escAttr(a?.code)}"></div>
       <div class="field"><label>Código alternativo</label><input id="f_altcode" placeholder="Opcional" value="${escAttr(a?.alt_code)}"></div>
     </div>
     <div class="field"><label>Descripción</label><input id="f_desc" placeholder="Nombre del producto" value="${escAttr(a?.description)}"></div>
+
+    <div class="field"><label>Moneda que estás editando</label>
+      <select id="f_currency" onchange="onCurrencySwitch()">
+        <option value="ARS">Pesos argentinos (ARS)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+    </div>
+    <div class="hint" style="margin-top:-10px;margin-bottom:14px">Cada moneda tiene su propio costo de lista, márgenes e IVA. Cambiar acá solo alterna cuál estás viendo/editando; no convierte ni comparte valores entre monedas.</div>
+
+    <div class="field"><label id="f_cost_label">Costo de lista (ARS)</label><input id="f_cost" type="number" step="0.01" placeholder="0.00"></div>
     <div class="field-row">
-      <div class="field"><label>Moneda</label>
-        <select id="f_currency" oninput="updatePricePreview()">
-          <option value="ARS" ${a?.currency === 'ARS' || !a ? 'selected' : ''}>Pesos argentinos (ARS)</option>
-          <option value="USD" ${a?.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
-        </select>
-      </div>
-      <div class="field"><label>Costo de lista</label><input id="f_cost" type="number" step="0.01" placeholder="0.00" value="${a?.list_cost ?? ''}" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0"></div>
+      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0" value="${a?.shipping_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
-      <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0" value="${a?.fx_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
+      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0"></div>
+      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21"></div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0" value="${a?.profit_margin_pct ?? ''}" oninput="updatePricePreview()"></div>
-      <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21" value="${a?.iva_pct ?? ''}" oninput="updatePricePreview()"></div>
-    </div>
+    <div class="field"><label id="f_price_manual_label">Precio de venta manual (ARS)</label><input id="f_price_manual" type="number" step="0.01" placeholder="Dejar vacío para usar el calculado"></div>
+    <div class="hint" style="margin-bottom:16px">Si cargás un precio manual, se usa ese valor directo al vender en esta moneda, en vez del calculado por márgenes.</div>
+
     <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${(a?.notes || '').replace(/</g, '&lt;')}</textarea></div>
 
-    <div class="field-row">
-      <div class="field"><label>Precio de venta en ARS (manual)</label><input id="f_price_ars" type="number" step="0.01" placeholder="Dejar vacío para usar el calculado" value="${a?.price_ars ?? ''}"></div>
-      <div class="field"><label>Precio de venta en USD (manual)</label><input id="f_price_usd" type="number" step="0.01" placeholder="Dejar vacío si no aplica" value="${a?.price_usd ?? ''}"></div>
-    </div>
-    <div class="hint" style="margin-bottom:16px">Si cargás un precio manual acá, se usa ese valor directo al vender en esa moneda, en vez del calculado por márgenes.</div>
-
     <div class="card" style="margin:4px 0 18px 0; padding:14px 16px;">
-      <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta</div>
+      <div class="card-title" style="margin-bottom:10px">Previsualización de precio de venta <span id="pv_currency_label"></span></div>
       <table class="ledger">
         <tbody>
           <tr><td>Costo de lista</td><td class="num" id="pv_cost">$ 0,00</td></tr>
@@ -811,7 +810,53 @@ function articleFormHtml(a) {
   `;
 }
 
+function articlePricingDataFrom(a) {
+  return {
+    ARS: {
+      cost: a?.list_cost_ars ?? '', ship: a?.shipping_margin_pct_ars ?? '', fx: a?.fx_margin_pct_ars ?? '',
+      profit: a?.profit_margin_pct_ars ?? '', iva: a?.iva_pct_ars ?? 21, priceManual: a?.price_ars ?? '',
+    },
+    USD: {
+      cost: a?.list_cost_usd ?? '', ship: a?.shipping_margin_pct_usd ?? '', fx: a?.fx_margin_pct_usd ?? '',
+      profit: a?.profit_margin_pct_usd ?? '', iva: a?.iva_pct_usd ?? 21, priceManual: a?.price_usd ?? '',
+    },
+  };
+}
+function loadCurrencyFieldsFromState(currency) {
+  const d = window._articlePricing[currency];
+  document.getElementById('f_cost').value = d.cost;
+  document.getElementById('f_ship').value = d.ship;
+  document.getElementById('f_fx').value = d.fx;
+  document.getElementById('f_profit').value = d.profit;
+  document.getElementById('f_iva').value = d.iva;
+  document.getElementById('f_price_manual').value = d.priceManual;
+  const sym = currency === 'USD' ? 'US$' : '$';
+  const label = currency === 'USD' ? 'Dólares (USD)' : 'Pesos (ARS)';
+  document.getElementById('f_cost_label').textContent = `Costo de lista (${currency})`;
+  document.getElementById('f_price_manual_label').textContent = `Precio de venta manual (${currency})`;
+  document.getElementById('pv_currency_label').textContent = `— ${label}`;
+}
+function saveCurrentFieldsToState(currency) {
+  window._articlePricing[currency] = {
+    cost: document.getElementById('f_cost').value,
+    ship: document.getElementById('f_ship').value,
+    fx: document.getElementById('f_fx').value,
+    profit: document.getElementById('f_profit').value,
+    iva: document.getElementById('f_iva').value,
+    priceManual: document.getElementById('f_price_manual').value,
+  };
+}
+let _articleCurrentCurrency = 'ARS';
+function onCurrencySwitch() {
+  saveCurrentFieldsToState(_articleCurrentCurrency);
+  _articleCurrentCurrency = document.getElementById('f_currency').value;
+  loadCurrencyFieldsFromState(_articleCurrentCurrency);
+  updatePricePreview();
+}
+
 function newArticleModal() {
+  window._articlePricing = articlePricingDataFrom(null);
+  _articleCurrentCurrency = 'ARS';
   openModal(`
     <h2>Nuevo artículo</h2>
     ${articleFormHtml(null)}
@@ -820,6 +865,8 @@ function newArticleModal() {
       <button class="btn btn-primary" onclick="createArticle()">Guardar</button>
     </div>
   `);
+  document.getElementById('f_currency').value = 'ARS';
+  loadCurrencyFieldsFromState('ARS');
   bindPricePreviewListeners();
   updatePricePreview();
 }
@@ -827,6 +874,8 @@ function newArticleModal() {
 function openEditArticleModal(articleId) {
   const a = state.cache.articles.find(x => x.article_id === articleId);
   if (!a) { toast('No se encontró el artículo.', 'error'); return; }
+  window._articlePricing = articlePricingDataFrom(a);
+  _articleCurrentCurrency = 'ARS';
   openModal(`
     <h2>Editar artículo</h2>
     ${articleFormHtml(a)}
@@ -835,6 +884,8 @@ function openEditArticleModal(articleId) {
       <button class="btn btn-primary" onclick="submitEditArticle(${a.article_id})">Guardar</button>
     </div>
   `);
+  document.getElementById('f_currency').value = 'ARS';
+  loadCurrencyFieldsFromState('ARS');
   bindPricePreviewListeners();
   updatePricePreview();
 }
@@ -870,6 +921,25 @@ function updatePricePreview() {
   document.getElementById('pv_final').innerHTML = `<strong>${sym} ${fmtMoney(final)}</strong>`;
   document.getElementById('pv_final_iva').innerHTML = `<strong>${sym} ${fmtMoney(finalIva)}</strong>`;
 }
+function buildArticlePricingPayload() {
+  saveCurrentFieldsToState(_articleCurrentCurrency);
+  const ars = window._articlePricing.ARS;
+  const usd = window._articlePricing.USD;
+  return {
+    list_cost_ars: Number(ars.cost) || 0,
+    shipping_margin_pct_ars: Number(ars.ship) || 0,
+    fx_margin_pct_ars: Number(ars.fx) || 0,
+    profit_margin_pct_ars: Number(ars.profit) || 0,
+    iva_pct_ars: ars.iva !== '' ? Number(ars.iva) : 21,
+    price_ars: ars.priceManual !== '' ? Number(ars.priceManual) : null,
+    list_cost_usd: Number(usd.cost) || 0,
+    shipping_margin_pct_usd: Number(usd.ship) || 0,
+    fx_margin_pct_usd: Number(usd.fx) || 0,
+    profit_margin_pct_usd: Number(usd.profit) || 0,
+    iva_pct_usd: usd.iva !== '' ? Number(usd.iva) : 21,
+    price_usd: usd.priceManual !== '' ? Number(usd.priceManual) : null,
+  };
+}
 async function createArticle() {
   try {
     await api('/articles', {
@@ -879,15 +949,8 @@ async function createArticle() {
         code: document.getElementById('f_code').value,
         alt_code: document.getElementById('f_altcode').value,
         description: document.getElementById('f_desc').value,
-        list_cost: Number(document.getElementById('f_cost').value),
-        currency: document.getElementById('f_currency').value,
-        shipping_margin_pct: Number(document.getElementById('f_ship').value),
-        fx_margin_pct: Number(document.getElementById('f_fx').value),
-        profit_margin_pct: Number(document.getElementById('f_profit').value),
-        iva_pct: Number(document.getElementById('f_iva').value),
         notes: document.getElementById('f_notes').value,
-        price_ars: document.getElementById('f_price_ars').value ? Number(document.getElementById('f_price_ars').value) : null,
-        price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
+        ...buildArticlePricingPayload(),
       }),
     });
     closeModal(); toast('Artículo creado.'); await refreshArticles(); renderView();
@@ -901,15 +964,8 @@ async function submitEditArticle(id) {
         code: document.getElementById('f_code').value,
         alt_code: document.getElementById('f_altcode').value,
         description: document.getElementById('f_desc').value,
-        list_cost: Number(document.getElementById('f_cost').value),
-        currency: document.getElementById('f_currency').value,
-        shipping_margin_pct: Number(document.getElementById('f_ship').value),
-        fx_margin_pct: Number(document.getElementById('f_fx').value),
-        profit_margin_pct: Number(document.getElementById('f_profit').value),
-        iva_pct: Number(document.getElementById('f_iva').value),
         notes: document.getElementById('f_notes').value,
-        price_ars: document.getElementById('f_price_ars').value ? Number(document.getElementById('f_price_ars').value) : null,
-        price_usd: document.getElementById('f_price_usd').value ? Number(document.getElementById('f_price_usd').value) : null,
+        ...buildArticlePricingPayload(),
       }),
     });
     closeModal(); toast('Artículo actualizado.'); await refreshArticles(); renderView();
@@ -2330,14 +2386,13 @@ function selectArticleOption(id, articleId, isPurchase) {
   document.getElementById(`line_${id}`).dataset.articleId = articleId;
   let price;
   if (isPurchase) {
-    price = Number(article.list_cost);
+    price = Number(article.list_cost_ars) || Number(article.list_cost_usd) || 0;
   } else {
     const saleCurrency = document.getElementById('f_sale_currency')?.value || 'ARS';
     const withIva = document.getElementById('f_sale_iva')?.value === 'si';
     price = articlePriceFor(article, saleCurrency, withIva);
-    if (price == null) price = withIva ? Number(article.final_price_with_iva) : Number(article.final_price);
   }
-  document.getElementById(`price_${id}`).value = price.toFixed(2);
+  document.getElementById(`price_${id}`).value = (price || 0).toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
 }
@@ -2750,20 +2805,24 @@ async function downloadFile(path, fallbackName) {
 const IMPORT_TEMPLATES = {
   articles: {
     label: 'Artículos',
-    headers: ['code', 'alt_code', 'description', 'list_cost', 'currency', 'shipping_margin_pct', 'fx_margin_pct', 'profit_margin_pct', 'iva_pct', 'price_ars', 'price_usd'],
-    sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 'ARS', 5, 0, 30, 21, '', 25],
+    headers: ['code', 'alt_code', 'description', 'list_cost_ars', 'shipping_margin_pct_ars', 'fx_margin_pct_ars', 'profit_margin_pct_ars', 'iva_pct_ars', 'list_cost_usd', 'shipping_margin_pct_usd', 'fx_margin_pct_usd', 'profit_margin_pct_usd', 'iva_pct_usd', 'price_ars', 'price_usd'],
+    sample: ['ART001', 'OEM-123', 'Amortiguador delantero', 15000, 5, 0, 30, 21, 0, 0, 0, 0, 21, '', 25],
     bulkEndpoint: '/articles/bulk-import',
     bulkKey: 'articles',
     buildPayload: (row) => ({
       code: row.code,
       alt_code: row.alt_code || '',
       description: row.description,
-      list_cost: Number(row.list_cost) || 0,
-      currency: (row.currency || 'ARS').toUpperCase(),
-      shipping_margin_pct: Number(row.shipping_margin_pct) || 0,
-      fx_margin_pct: Number(row.fx_margin_pct) || 0,
-      profit_margin_pct: Number(row.profit_margin_pct) || 0,
-      iva_pct: row.iva_pct != null && row.iva_pct !== '' ? Number(row.iva_pct) : 21,
+      list_cost_ars: Number(row.list_cost_ars) || 0,
+      shipping_margin_pct_ars: Number(row.shipping_margin_pct_ars) || 0,
+      fx_margin_pct_ars: Number(row.fx_margin_pct_ars) || 0,
+      profit_margin_pct_ars: Number(row.profit_margin_pct_ars) || 0,
+      iva_pct_ars: row.iva_pct_ars != null && row.iva_pct_ars !== '' ? Number(row.iva_pct_ars) : 21,
+      list_cost_usd: Number(row.list_cost_usd) || 0,
+      shipping_margin_pct_usd: Number(row.shipping_margin_pct_usd) || 0,
+      fx_margin_pct_usd: Number(row.fx_margin_pct_usd) || 0,
+      profit_margin_pct_usd: Number(row.profit_margin_pct_usd) || 0,
+      iva_pct_usd: row.iva_pct_usd != null && row.iva_pct_usd !== '' ? Number(row.iva_pct_usd) : 21,
       price_ars: row.price_ars != null && row.price_ars !== '' ? Number(row.price_ars) : null,
       price_usd: row.price_usd != null && row.price_usd !== '' ? Number(row.price_usd) : null,
     }),
