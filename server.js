@@ -609,16 +609,34 @@ app.post('/articles/bulk-import', async (req, res) => {
     const { business_unit_id, articles } = req.body;
     if (!articles || !articles.length) throw new Error('No se recibieron artículos para importar.');
     await client.query('BEGIN');
-    let created = 0;
+    let created = 0, updated = 0;
     const errors = [];
     for (const a of articles) {
       try {
-        await client.query(
+        const r = await client.query(
           `INSERT INTO article (business_unit_id, code, alt_code, description, notes,
              list_cost_ars, shipping_margin_pct_ars, fx_margin_pct_ars, profit_margin_pct_ars, iva_pct_ars,
              list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
              price_ars, price_usd)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           ON CONFLICT (business_unit_id, code) DO UPDATE SET
+             alt_code = EXCLUDED.alt_code,
+             description = EXCLUDED.description,
+             notes = COALESCE(EXCLUDED.notes, article.notes),
+             list_cost_ars = EXCLUDED.list_cost_ars,
+             shipping_margin_pct_ars = EXCLUDED.shipping_margin_pct_ars,
+             fx_margin_pct_ars = EXCLUDED.fx_margin_pct_ars,
+             profit_margin_pct_ars = EXCLUDED.profit_margin_pct_ars,
+             iva_pct_ars = EXCLUDED.iva_pct_ars,
+             list_cost_usd = EXCLUDED.list_cost_usd,
+             shipping_margin_pct_usd = EXCLUDED.shipping_margin_pct_usd,
+             fx_margin_pct_usd = EXCLUDED.fx_margin_pct_usd,
+             profit_margin_pct_usd = EXCLUDED.profit_margin_pct_usd,
+             iva_pct_usd = EXCLUDED.iva_pct_usd,
+             price_ars = EXCLUDED.price_ars,
+             price_usd = EXCLUDED.price_usd,
+             deleted_at = NULL
+           RETURNING (xmax = 0) AS inserted`,
           [
             business_unit_id, a.code, a.alt_code || null, a.description, a.notes || null,
             a.list_cost_ars || 0, a.shipping_margin_pct_ars || 0, a.fx_margin_pct_ars || 0, a.profit_margin_pct_ars || 0, a.iva_pct_ars != null ? a.iva_pct_ars : 21,
@@ -626,13 +644,13 @@ app.post('/articles/bulk-import', async (req, res) => {
             a.price_ars || null, a.price_usd || null,
           ]
         );
-        created++;
+        if (r.rows[0].inserted) created++; else updated++;
       } catch (e) {
         errors.push({ code: a.code, error: e.message });
       }
     }
     await client.query('COMMIT');
-    res.json({ created, failed: errors.length, errors: errors.slice(0, 50) });
+    res.json({ created, updated, failed: errors.length, errors: errors.slice(0, 50) });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });

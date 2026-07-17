@@ -2923,15 +2923,28 @@ async function handleImportFile(kind, file) {
     const result = await api(tpl.bulkEndpoint, { method: 'POST', body: JSON.stringify(body) });
 
     renderView();
+    const createdMsg = result.created ? `${result.created} creados` : '';
+    const updatedMsg = result.updated ? `${result.updated} actualizados` : '';
+    const summary = [createdMsg, updatedMsg].filter(Boolean).join(' — ');
     if (result.failed === 0) {
-      toast(`Importación completa: ${result.created} registros creados.`);
+      toast(`Importación completa: ${summary}.`);
     } else {
-      toast(`Importado: ${result.created} — Con errores: ${result.failed}. Revisá códigos/nombres duplicados.`, 'error');
-      console.warn('Errores de importación:', result.errors);
+      toast(`${summary} — Con errores: ${result.failed}.`, 'error');
+      showImportErrorsModal(result.errors);
     }
   } catch (e) {
     toast(e.message || 'No se pudo leer el archivo. Verificá que sea un Excel válido.', 'error');
   }
+}
+
+function showImportErrorsModal(errors) {
+  openModal(`
+    <h2>Errores de importación</h2>
+    <div class="hint" style="margin-bottom:14px">Estas filas no se pudieron importar. El motivo más común es un problema de formato en algún valor.</div>
+    ${tableOrEmpty(errors || [], ['Código/Nombre', 'Motivo'], (e) => `
+      <tr><td class="mono">${e.code || e.name || '-'}</td><td>${e.error}</td></tr>`, 'Sin detalle disponible.')}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
 }
 
 function selectCashBoxFilter(id) {
