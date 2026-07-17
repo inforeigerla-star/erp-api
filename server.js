@@ -1280,39 +1280,13 @@ app.post('/sales', async (req, res) => {
 });
 
 app.post('/sales/:id/confirm', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { id } = req.params;
-    await client.query('BEGIN');
-    await client.query(`UPDATE sale SET status='CONFIRMED' WHERE id=$1`, [id]);
-
-    const saleR = await client.query('SELECT * FROM sale WHERE id=$1', [id]);
-    const sale = saleR.rows[0];
-
-    if (sale.payment_type === 'CASH' && sale.cash_box_id) {
-      const sessionR = await client.query(
-        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`,
-        [sale.cash_box_id]
-      );
-      const session = sessionR.rows[0];
-      if (!session) throw new Error('La caja/sobre de destino no tiene una sesión abierta.');
-
-      await client.query(
-        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, verified)
-         VALUES ($1,$2,$3,$4,$5,$6,FALSE)`,
-        [sale.id, sale.cash_box_id, session.id, sale.business_unit_id, sale.project_id, sale.total_amount]
-      );
-      await client.query('UPDATE sale SET settled_amount = total_amount WHERE id=$1', [sale.id]);
-    }
-
-    await client.query('COMMIT');
+    await pool.query(`UPDATE sale SET status='CONFIRMED' WHERE id=$1`, [id]);
     const r = await pool.query('SELECT * FROM sale_detail WHERE sale_id=$1', [id]);
     res.json(r.rows);
   } catch (e) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
-  } finally {
-    client.release();
   }
 });
 

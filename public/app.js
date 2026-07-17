@@ -1803,12 +1803,19 @@ function collectionBadge(status) {
   return `<span class="badge badge-${map[status] || 'pending'}">${status}</span>`;
 }
 
-function openCollectModal(saleId, remaining) {
+async function openCollectModal(saleId, remaining) {
   const boxItems = state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.currency})` }));
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  let defaultBoxId = null;
+  try {
+    const { sale } = await api(`/sales/${saleId}/full`);
+    defaultBoxId = sale.cash_box_id;
+  } catch (e) { /* seguimos sin default */ }
+
   openModal(`
     <h2>Procesar cobro — Venta #${saleId}</h2>
     <div class="hint" style="margin-bottom:14px">Saldo pendiente: <strong>$ ${fmtMoney(remaining)}</strong>. Repartí el monto cobrado entre una o más cajas.</div>
+    ${defaultBoxId ? `<div class="hint" style="margin-bottom:14px">Esta venta se registró para ir a <strong>${state.cache.cashBoxes.find(b => b.id === defaultBoxId)?.name || ''}</strong>. Ya viene precargada abajo; podés cambiarla si hace falta.</div>` : ''}
     <div class="line-items" id="collectSplits"></div>
     <button class="btn btn-sm" onclick="addCollectSplit()">+ Agregar caja</button>
     <div class="modal-actions">
@@ -1818,10 +1825,10 @@ function openCollectModal(saleId, remaining) {
   `);
   window._collectBoxItems = boxItems;
   window._collectProjItems = projItems;
-  addCollectSplit();
+  addCollectSplit(defaultBoxId, defaultBoxId ? remaining : null);
 }
 let collectSplitCount = 0;
-function addCollectSplit() {
+function addCollectSplit(defaultBoxId, defaultAmount) {
   const id = collectSplitCount++;
   const container = document.getElementById('collectSplits');
   const row = document.createElement('div');
@@ -1829,11 +1836,12 @@ function addCollectSplit() {
   row.id = `csplit_${id}`;
   row.innerHTML = `
     ${searchableSelectHtml(`cbox_${id}`, window._collectBoxItems, 'Buscar caja…')}
-    <input type="number" step="0.01" placeholder="Monto" id="camount_${id}">
+    <input type="number" step="0.01" placeholder="Monto" id="camount_${id}" value="${defaultAmount != null ? Number(defaultAmount).toFixed(2) : ''}">
     ${searchableSelectHtml(`cproj_${id}`, window._collectProjItems, 'Buscar proyecto…', 'Sin proyecto')}
     <button class="remove-line" onclick="document.getElementById('csplit_${id}').remove()">×</button>
   `;
   container.appendChild(row);
+  if (defaultBoxId) selectSearchableOption(`cbox_${id}`, defaultBoxId);
 }
 async function submitCollect(saleId) {
   const rows = [...document.getElementById('collectSplits').children];
