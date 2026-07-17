@@ -463,6 +463,33 @@ table.ledger tr:hover td { background: #FAFAFA; }
   animation: working-spin 0.7s linear infinite;
 }
 @keyframes working-spin { to { transform: rotate(360deg); } }
+
+.stock-warning-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 10, 0, 0.55);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.stock-warning-box {
+  background: #FFF7E8;
+  border: 2px solid #E8A100;
+  border-radius: 14px;
+  padding: 28px 30px;
+  max-width: 460px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+.stock-warning-icon { font-size: 34px; margin-bottom: 8px; }
+.stock-warning-title { font-size: 17px; font-weight: 700; color: #8A5700; margin-bottom: 10px; }
+.stock-warning-text { font-size: 13.5px; color: #4A3200; line-height: 1.5; margin-bottom: 20px; }
+.stock-warning-actions { display: flex; justify-content: center; gap: 10px; }
+.stock-warning-actions #stockWarnContinue { background: #E8A100; border-color: #E8A100; color: #fff; font-weight: 600; }
+.stock-warning-actions #stockWarnContinue:hover { background: #CB8D00; }
 .toast {
   background: var(--sidebar);
   color: #fff;

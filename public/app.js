@@ -507,11 +507,11 @@ async function renderStock() {
     <div class="card">
       <div class="card-title">Stock por depósito — unidad seleccionada</div>
       ${tableOrEmpty(rows, ['Código', 'Artículo', 'Depósito', 'Cantidad', ''], (s) => `
-        <tr>
+        <tr ${Number(s.quantity) < 0 ? 'style="background:#FFF3E0"' : ''}>
           <td class="mono">${s.code}</td>
           <td>${s.description}</td>
           <td>${s.warehouse_name}</td>
-          <td class="num">${fmtQty(s.quantity)}</td>
+          <td class="num" style="${Number(s.quantity) < 0 ? 'color:#C9820A;font-weight:700' : ''}">${Number(s.quantity) < 0 ? '⚠️ ' : ''}${fmtQty(s.quantity)}</td>
           <td>
             <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Historia</button>
             <button class="btn btn-sm" onclick="quickAddStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Agregar unidades</button>
@@ -1587,8 +1587,9 @@ async function deleteQuote(id) {
 }
 
 function newQuoteModal() {
+  window._stockLookup = null;
   const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
-  const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
+  const whItems = [{ id: '', label: 'Sin depósito' }, ...whByBU().map(w => ({ id: w.id, label: w.name }))];
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
 
   lineItemCount = 0;
@@ -2323,6 +2324,7 @@ async function selectQuoteToLoad(quoteId) {
 }
 
 function newOperationModal(kind) {
+  window._stockLookup = null;
   const isPurchase = kind === 'purchase';
   const contactItems = (isPurchase ? state.cache.suppliers : state.cache.customers)
     .map(c => ({ id: c.id, label: c.name }));
@@ -2444,7 +2446,7 @@ function addLineItem(kind) {
       <input type="hidden" id="artid_${id}">
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
-    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" oninput="recalcLineItemsTotal()">
+    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" oninput="recalcLineItemsTotal()" ${!isPurchase ? `onchange="checkLineStock(${id})"` : ''}>
     <input type="number" step="0.01" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" oninput="recalcLineItemsTotal()">
     <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
   `;
@@ -2484,7 +2486,7 @@ function filterArticleOptions(id, isPurchase) {
   resultsEl.style.display = 'block';
 }
 
-function selectArticleOption(id, articleId, isPurchase) {
+async function selectArticleOption(id, articleId, isPurchase) {
   const article = artByBU().find(a => a.article_id === articleId);
   if (!article) return;
   document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
@@ -2501,7 +2503,56 @@ function selectArticleOption(id, articleId, isPurchase) {
   document.getElementById(`price_${id}`).value = (price || 0).toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
+  if (!isPurchase) await checkLineStock(id);
 }
+async function getStockQty(articleId, warehouseId) {
+  if (!warehouseId || !articleId) return null;
+  if (!window._stockLookup) {
+    const stockRows = await api('/stock');
+    window._stockLookup = {};
+    stockRows.forEach(s => { window._stockLookup[`${s.warehouse_id}_${s.article_id}`] = Number(s.quantity); });
+  }
+  const key = `${warehouseId}_${articleId}`;
+  return window._stockLookup[key] != null ? window._stockLookup[key] : 0;
+}
+async function checkLineStock(id) {
+  const articleId = Number(document.getElementById(`artid_${id}`)?.value);
+  const qty = Number(document.getElementById(`qty_${id}`)?.value);
+  const warehouseId = Number(getSearchableValue('warehouse') || getSearchableValue('quote_warehouse'));
+  if (!articleId || !warehouseId || !(qty > 0)) return;
+
+  const available = await getStockQty(articleId, warehouseId);
+  if (available == null || qty <= available) return;
+
+  const article = artByBU().find(a => a.article_id === articleId);
+  const ok = await showStockWarning(
+    `El artículo <strong>${article ? article.code + ' — ' + article.description : ''}</strong> no tiene stock suficiente en este depósito.<br>Disponible: <strong>${fmtQty(available)}</strong> — Estás cargando: <strong>${fmtQty(qty)}</strong>.<br><br>Si continuás, el stock de este artículo va a quedar en negativo.`
+  );
+  if (!ok) {
+    document.getElementById(`qty_${id}`).value = available > 0 ? available : '';
+    recalcLineItemsTotal();
+  }
+}
+function showStockWarning(messageHtml) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'stock-warning-overlay';
+    overlay.innerHTML = `
+      <div class="stock-warning-box">
+        <div class="stock-warning-icon">⚠️</div>
+        <div class="stock-warning-title">Stock insuficiente</div>
+        <div class="stock-warning-text">${messageHtml}</div>
+        <div class="stock-warning-actions">
+          <button class="btn" id="stockWarnCancel">Cancelar</button>
+          <button class="btn" id="stockWarnContinue">Continuar de todos modos</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.getElementById('stockWarnCancel').onclick = () => { overlay.remove(); resolve(false); };
+    document.getElementById('stockWarnContinue').onclick = () => { overlay.remove(); resolve(true); };
+  });
+}
+
 function refreshAllLinePrices() {
   const rows = [...document.getElementById('lineItems').children];
   rows.forEach(row => {
@@ -2851,10 +2902,24 @@ function searchableSelectHtml(baseId, items, placeholder, defaultLabel) {
     <div class="article-search-wrap">
       <input type="text" class="article-search-input" id="ss_input_${baseId}" placeholder="${placeholder}"
              value="${defaultLabel ? escAttr(defaultLabel) : ''}" autocomplete="off"
-             oninput="filterSearchableSelect('${baseId}')" onfocus="filterSearchableSelect('${baseId}')">
+             oninput="filterSearchableSelect('${baseId}')" onfocus="showAllSearchableOptions('${baseId}')">
       <input type="hidden" id="ss_value_${baseId}" value="${items[0]?.id ?? ''}">
       <div class="article-search-results" id="ss_results_${baseId}"></div>
     </div>`;
+}
+function showAllSearchableOptions(baseId) {
+  const input = document.getElementById(`ss_input_${baseId}`);
+  if (input) input.select();
+  const items = window._searchableSelectData[baseId] || [];
+  const resultsEl = document.getElementById(`ss_results_${baseId}`);
+  if (!resultsEl) return;
+  resultsEl.innerHTML = !items.length
+    ? `<div class="article-search-empty">Sin resultados</div>`
+    : items.slice(0, 40).map(i => `
+        <div class="article-search-item" onclick="selectSearchableOption('${baseId}', '${i.id}')">
+          <span class="article-search-desc">${i.label}</span>
+        </div>`).join('');
+  resultsEl.style.display = 'block';
 }
 function filterSearchableSelect(baseId) {
   const items = window._searchableSelectData[baseId] || [];
