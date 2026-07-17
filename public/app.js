@@ -1687,15 +1687,22 @@ async function renderSales() {
   }
 
   if (salesSubTab === 'collect') {
+    const collections = await api(`/sale-collections/by-business-unit/${state.selectedBU}`);
+    const collectionsBySale = {};
+    collections.forEach(c => {
+      if (!collectionsBySale[c.sale_id]) collectionsBySale[c.sale_id] = [];
+      collectionsBySale[c.sale_id].push(c);
+    });
     el.innerHTML = tabsHtml + `
       <div class="card">
         <div class="card-title">Facturas pendientes de procesar (sin cobrar o cuenta corriente)</div>
-        ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+        ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Caja/Sobre', 'Total', 'Cobrado', 'Pendiente', 'Estado', '', 'Documentos'], (s) => `
           <tr>
             <td class="mono">#${s.id}</td>
             <td>${customerName(s.customer_id)}</td>
             <td class="mono">${customerTaxId(s.customer_id)}</td>
             <td class="mono">${fmtDate(s.date)}</td>
+            <td>${saleCashBoxDisplay(s, collectionsBySale[s.id])}</td>
             <td class="num">$ ${fmtMoney(s.total_amount)}</td>
             <td class="num income">$ ${fmtMoney(s.settled_amount)}</td>
             <td class="num expense">$ ${fmtMoney(s.remaining_amount)}</td>
@@ -1703,6 +1710,10 @@ async function renderSales() {
             <td>
               <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
               <button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>
+            </td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
+              <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
             </td>
           </tr>`, 'No hay facturas pendientes de procesar en esta unidad.')}
       </div>`;
