@@ -1751,7 +1751,7 @@ async function renderSales() {
           ${(salesDateFrom || salesDateTo) ? `<button class="btn btn-sm" onclick="salesClearDateFilter()">Limpiar</button>` : ''}
         </div>
       </div>
-      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Total', ''], (s) => `
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Caja/Sobre', 'Total', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
@@ -1759,6 +1759,7 @@ async function renderSales() {
           <td class="mono">${fmtDate(s.date)}</td>
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
+          <td>${cashBoxName(s.cash_box_id)}</td>
           <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
             <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
@@ -1793,6 +1794,11 @@ function switchSalesTab(tab) {
 }
 function customerTaxId(id) {
   return state.cache.customers.find(c => c.id === id)?.tax_id || '-';
+}
+function cashBoxName(id) {
+  if (!id) return '<span style="color:var(--muted)">—</span>';
+  const box = state.cache.cashBoxes.find(b => b.id === id);
+  return box ? `${box.name} <span class="hint">(${box.kind === 'SOBRE' ? 'Sobre' : 'Caja'})</span>` : '—';
 }
 
 function paymentTypeLabel(t) {
