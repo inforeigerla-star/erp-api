@@ -1738,7 +1738,15 @@ async function renderSales() {
   const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: salesPage, limit: 25 });
   if (salesDateFrom) params.set('date_from', salesDateFrom);
   if (salesDateTo) params.set('date_to', salesDateTo);
-  const { rows, total, limit } = await api(`/sales/list?${params.toString()}`);
+  const [{ rows, total, limit }, collections] = await Promise.all([
+    api(`/sales/list?${params.toString()}`),
+    api(`/sale-collections/by-business-unit/${state.selectedBU}`),
+  ]);
+  const collectionsBySale = {};
+  collections.forEach(c => {
+    if (!collectionsBySale[c.sale_id]) collectionsBySale[c.sale_id] = [];
+    collectionsBySale[c.sale_id].push(c);
+  });
 
   el.innerHTML = tabsHtml + `
     <div class="card">
@@ -1751,7 +1759,7 @@ async function renderSales() {
           ${(salesDateFrom || salesDateTo) ? `<button class="btn btn-sm" onclick="salesClearDateFilter()">Limpiar</button>` : ''}
         </div>
       </div>
-      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Caja/Sobre', 'Total', ''], (s) => `
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Caja/Sobre', 'Total', '', 'Documentos'], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
@@ -1759,12 +1767,13 @@ async function renderSales() {
           <td class="mono">${fmtDate(s.date)}</td>
           <td>${statusBadge(s.status)}</td>
           <td>${paymentTypeLabel(s.payment_type)}</td>
-          <td>${cashBoxName(s.cash_box_id)}</td>
+          <td>${saleCashBoxDisplay(s, collectionsBySale[s.id])}</td>
           <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
             <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
             ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
-            <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
+          </td>
+          <td style="white-space:nowrap">
             <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
             <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
           </td>
@@ -1772,6 +1781,16 @@ async function renderSales() {
       ${total ? paginationControlsHtml('sales', salesPage, total, limit) : ''}
     </div>
   `;
+}
+function saleCashBoxDisplay(sale, collections) {
+  if (collections && collections.length) {
+    return collections.map(c => `${c.cash_box_name} <span class="hint">(${c.kind === 'SOBRE' ? 'Sobre' : 'Caja'}${c.verified ? '' : ' · sin verificar'})</span>`).join('<br>');
+  }
+  if (sale.cash_box_id) {
+    const box = state.cache.cashBoxes.find(b => b.id === sale.cash_box_id);
+    return box ? `${box.name} <span class="hint">(a procesar)</span>` : '—';
+  }
+  return '<span style="color:var(--muted)">—</span>';
 }
 function salesChangePage(page) {
   salesPage = page;

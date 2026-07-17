@@ -1535,6 +1535,17 @@ app.get('/sale-collections/pending', async (req, res) => {
   res.json(r.rows);
 });
 
+app.get('/sale-collections/by-business-unit/:businessUnitId', async (req, res) => {
+  const r = await pool.query(`
+    SELECT sc.sale_id, sc.verified, cb.id AS cash_box_id, cb.name AS cash_box_name, cb.kind AS cash_box_kind, sc.amount
+    FROM sale_collection sc
+    JOIN cash_box cb ON cb.id = sc.cash_box_id
+    WHERE sc.business_unit_id = $1
+    ORDER BY sc.created_at DESC
+  `, [req.params.businessUnitId]);
+  res.json(r.rows);
+});
+
 app.post('/sale-collections/:id/verify', async (req, res) => {
   const client = await pool.connect();
   try {
