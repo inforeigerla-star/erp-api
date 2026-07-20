@@ -14,7 +14,37 @@ const fmtMoney = (n) => {
   const sign = num < 0 ? '-' : '';
   return sign + Math.abs(num).toLocaleString('en-US').replace(/,/g, '.');
 };
-const fmtQty = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+function fmtQty(n) {
+  const num = Number(n) || 0;
+  const sign = num < 0 ? '-' : '';
+  const abs = Math.round(Math.abs(num) * 1000) / 1000;
+  const [intPart, decPart] = String(abs).split('.');
+  const intFormatted = Number(intPart).toLocaleString('en-US').replace(/,/g, '.');
+  return sign + intFormatted + (decPart ? ',' + decPart : '');
+}
+
+// ---------- Campos de dinero editables con formato de miles (punto) ----------
+function parseMoneyInput(str) {
+  if (str == null || str === '') return 0;
+  const clean = String(str).replace(/\./g, '').replace(',', '.').replace(/[^0-9.\-]/g, '');
+  const num = Number(clean);
+  return isNaN(num) ? 0 : num;
+}
+function formatMoneyFieldValue(num) {
+  if (num === '' || num == null || isNaN(num)) return '';
+  const parts = Number(num).toFixed(2).split('.');
+  const intFormatted = Math.abs(Number(parts[0])).toLocaleString('en-US').replace(/,/g, '.');
+  const sign = Number(num) < 0 ? '-' : '';
+  return sign + intFormatted + ',' + parts[1];
+}
+function formatMoneyField(el) {
+  const num = parseMoneyInput(el.value);
+  el.value = el.value === '' ? '' : formatMoneyFieldValue(num);
+}
+function unformatMoneyField(el) {
+  const num = parseMoneyInput(el.value);
+  el.value = el.value === '' ? '' : (num === 0 && !el.value.trim() ? '' : String(num));
+}
 function fmtDate(value) {
   if (!value) return '-';
   let str = value instanceof Date ? value.toISOString() : String(value);
@@ -826,7 +856,7 @@ function articleFormHtml(a) {
     </div>
     <div class="hint" style="margin-top:-10px;margin-bottom:14px">Cada moneda tiene su propio costo de lista, márgenes e IVA. Cambiar acá solo alterna cuál estás viendo/editando; no convierte ni comparte valores entre monedas.</div>
 
-    <div class="field"><label id="f_cost_label">Costo de lista (ARS)</label><input id="f_cost" type="number" step="0.01" placeholder="0.00"></div>
+    <div class="field"><label id="f_cost_label">Costo de lista (ARS)</label><input id="f_cost" type="text" inputmode="decimal" placeholder="0,00" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)"></div>
     <div class="field-row">
       <div class="field"><label>Margen envío %</label><input id="f_ship" type="number" step="0.01" placeholder="0"></div>
       <div class="field"><label>Margen TC %</label><input id="f_fx" type="number" step="0.01" placeholder="0"></div>
@@ -835,7 +865,7 @@ function articleFormHtml(a) {
       <div class="field"><label>Margen ganancia %</label><input id="f_profit" type="number" step="0.01" placeholder="0"></div>
       <div class="field"><label>IVA %</label><input id="f_iva" type="number" step="0.01" placeholder="21"></div>
     </div>
-    <div class="field"><label id="f_price_manual_label">Precio de venta manual (ARS)</label><input id="f_price_manual" type="number" step="0.01" placeholder="Dejar vacío para usar el calculado"></div>
+    <div class="field"><label id="f_price_manual_label">Precio de venta manual (ARS)</label><input id="f_price_manual" type="text" inputmode="decimal" placeholder="Dejar vacío para usar el calculado" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)"></div>
     <div class="hint" style="margin-bottom:16px">Si cargás un precio manual, se usa ese valor directo al vender en esta moneda, en vez del calculado por márgenes.</div>
 
     <div class="field"><label>Observaciones</label><textarea id="f_notes" rows="3" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#FAFAFA;font-family:var(--sans)" placeholder="Notas internas sobre este artículo...">${(a?.notes || '').replace(/</g, '&lt;')}</textarea></div>
@@ -870,12 +900,12 @@ function articlePricingDataFrom(a) {
 }
 function loadCurrencyFieldsFromState(currency) {
   const d = window._articlePricing[currency];
-  document.getElementById('f_cost').value = d.cost;
+  document.getElementById('f_cost').value = d.cost !== '' ? formatMoneyFieldValue(d.cost) : '';
   document.getElementById('f_ship').value = d.ship;
   document.getElementById('f_fx').value = d.fx;
   document.getElementById('f_profit').value = d.profit;
   document.getElementById('f_iva').value = d.iva;
-  document.getElementById('f_price_manual').value = d.priceManual;
+  document.getElementById('f_price_manual').value = d.priceManual !== '' ? formatMoneyFieldValue(d.priceManual) : '';
   const sym = currency === 'USD' ? 'US$' : '$';
   const label = currency === 'USD' ? 'Dólares (USD)' : 'Pesos (ARS)';
   document.getElementById('f_cost_label').textContent = `Costo de lista (${currency})`;
@@ -952,7 +982,7 @@ function bindPricePreviewListeners() {
 }
 
 function updatePricePreview() {
-  const cost = Number(document.getElementById('f_cost').value) || 0;
+  const cost = parseMoneyInput(document.getElementById('f_cost').value);
   const ship = Number(document.getElementById('f_ship').value) || 0;
   const fx = Number(document.getElementById('f_fx').value) || 0;
   const profit = Number(document.getElementById('f_profit').value) || 0;
@@ -977,18 +1007,18 @@ function buildArticlePricingPayload() {
   const ars = window._articlePricing.ARS;
   const usd = window._articlePricing.USD;
   return {
-    list_cost_ars: Number(ars.cost) || 0,
+    list_cost_ars: parseMoneyInput(ars.cost) || 0,
     shipping_margin_pct_ars: Number(ars.ship) || 0,
     fx_margin_pct_ars: Number(ars.fx) || 0,
     profit_margin_pct_ars: Number(ars.profit) || 0,
     iva_pct_ars: ars.iva !== '' ? Number(ars.iva) : 21,
-    price_ars: ars.priceManual !== '' ? Number(ars.priceManual) : null,
-    list_cost_usd: Number(usd.cost) || 0,
+    price_ars: ars.priceManual !== '' ? parseMoneyInput(ars.priceManual) : null,
+    list_cost_usd: parseMoneyInput(usd.cost) || 0,
     shipping_margin_pct_usd: Number(usd.ship) || 0,
     fx_margin_pct_usd: Number(usd.fx) || 0,
     profit_margin_pct_usd: Number(usd.profit) || 0,
     iva_pct_usd: usd.iva !== '' ? Number(usd.iva) : 21,
-    price_usd: usd.priceManual !== '' ? Number(usd.priceManual) : null,
+    price_usd: usd.priceManual !== '' ? parseMoneyInput(usd.priceManual) : null,
   };
 }
 async function createArticle() {
@@ -1499,7 +1529,7 @@ function addPaySplit() {
   row.id = `psplit_${id}`;
   row.innerHTML = `
     ${searchableSelectHtml(`pbox_${id}`, window._payBoxItems, 'Buscar caja…')}
-    <input type="number" step="0.01" placeholder="Monto" id="pamount_${id}">
+    <input type="text" inputmode="decimal" placeholder="Monto" id="pamount_${id}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
     ${searchableSelectHtml(`pproj_${id}`, window._payProjItems, 'Buscar proyecto…', 'Sin proyecto')}
     <button class="remove-line" onclick="document.getElementById('psplit_${id}').remove()">×</button>
   `;
@@ -1511,7 +1541,7 @@ async function submitPay(purchaseId) {
     const idx = row.id.replace('psplit_', '');
     return {
       cash_box_id: Number(getSearchableValue(`pbox_${idx}`)),
-      amount: Number(document.getElementById(`pamount_${idx}`).value),
+      amount: parseMoneyInput(document.getElementById(`pamount_${idx}`).value),
       project_id: getSearchableValue(`pproj_${idx}`) ? Number(getSearchableValue(`pproj_${idx}`)) : null,
     };
   }).filter(s => s.amount > 0);
@@ -1637,7 +1667,7 @@ async function createQuote() {
     return {
       article_id: Number(document.getElementById(`artid_${idMatch}`).value),
       quantity: Number(document.getElementById(`qty_${idMatch}`).value),
-      unit_price: Number(document.getElementById(`price_${idMatch}`).value),
+      unit_price: parseMoneyInput(document.getElementById(`price_${idMatch}`).value),
     };
   }).filter(i => i.article_id);
 
@@ -1903,7 +1933,7 @@ function addCollectSplit(defaultBoxId, defaultAmount) {
   row.id = `csplit_${id}`;
   row.innerHTML = `
     ${searchableSelectHtml(`cbox_${id}`, window._collectBoxItems, 'Buscar caja…')}
-    <input type="number" step="0.01" placeholder="Monto" id="camount_${id}" value="${defaultAmount != null ? Number(defaultAmount).toFixed(2) : ''}">
+    <input type="text" inputmode="decimal" placeholder="Monto" id="camount_${id}" value="${defaultAmount != null ? formatMoneyFieldValue(defaultAmount) : ''}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
     ${searchableSelectHtml(`cproj_${id}`, window._collectProjItems, 'Buscar proyecto…', 'Sin proyecto')}
     <button class="remove-line" onclick="document.getElementById('csplit_${id}').remove()">×</button>
   `;
@@ -1916,7 +1946,7 @@ async function submitCollect(saleId) {
     const idx = row.id.replace('csplit_', '');
     return {
       cash_box_id: Number(getSearchableValue(`cbox_${idx}`)),
-      amount: Number(document.getElementById(`camount_${idx}`).value),
+      amount: parseMoneyInput(document.getElementById(`camount_${idx}`).value),
       project_id: getSearchableValue(`cproj_${idx}`) ? Number(getSearchableValue(`cproj_${idx}`)) : null,
     };
   }).filter(s => s.amount > 0);
@@ -2326,7 +2356,7 @@ async function selectQuoteToLoad(quoteId) {
         <input type="hidden" id="artid_${id}" value="${item.article_id}">
       </div>
       <input type="number" step="0.001" id="qty_${id}" value="${item.quantity}" oninput="recalcLineItemsTotal()">
-      <input type="number" step="0.01" id="price_${id}" value="${item.unit_price}" oninput="recalcLineItemsTotal()">
+      <input type="text" inputmode="decimal" id="price_${id}" value="${formatMoneyFieldValue(item.unit_price)}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
       <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
     `;
     container.appendChild(row);
@@ -2398,7 +2428,7 @@ function newOperationModal(kind) {
     ${!isPurchase ? `
     <div class="field">
       <label>Importe final (editable)</label>
-      <input id="f_total_override" type="number" step="0.01" placeholder="Se calcula solo, pero podés modificarlo" oninput="markTotalAsManual()">
+      <input id="f_total_override" type="text" inputmode="decimal" placeholder="Se calcula solo, pero podés modificarlo" oninput="markTotalAsManual()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
       <div class="hint" id="totalHint">Se calcula automáticamente a partir de los artículos. Podés cambiarlo manualmente si necesitás ajustarlo.</div>
     </div>` : ''}
 
@@ -2422,11 +2452,11 @@ function recalcLineItemsTotal() {
   rows.forEach(row => {
     const idMatch = row.id.replace('line_', '');
     const qty = Number(document.getElementById(`qty_${idMatch}`)?.value) || 0;
-    const price = Number(document.getElementById(`price_${idMatch}`)?.value) || 0;
+    const price = parseMoneyInput(document.getElementById(`price_${idMatch}`)?.value);
     total += qty * price;
   });
   const overrideField = document.getElementById('f_total_override');
-  if (overrideField) overrideField.value = total.toFixed(2);
+  if (overrideField) overrideField.value = formatMoneyFieldValue(total);
 }
 
 function togglePaymentBoxField(isPurchase) {
@@ -2460,7 +2490,7 @@ function addLineItem(kind) {
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
     <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" oninput="recalcLineItemsTotal()" ${!isPurchase ? `onchange="checkLineStock(${id})"` : ''}>
-    <input type="number" step="0.01" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" oninput="recalcLineItemsTotal()">
+    <input type="text" inputmode="decimal" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
     <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
   `;
   container.appendChild(row);
@@ -2513,7 +2543,7 @@ function updateLinePrice(id, articleId, isPurchase) {
     const withIva = document.getElementById('f_sale_iva')?.value === 'si';
     price = articlePriceFor(article, saleCurrency, withIva);
   }
-  document.getElementById(`price_${id}`).value = (price || 0).toFixed(2);
+  document.getElementById(`price_${id}`).value = formatMoneyFieldValue(price || 0);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
 }
@@ -2587,7 +2617,7 @@ async function createOperation(kind) {
     return {
       article_id: Number(document.getElementById(`artid_${idMatch}`).value),
       quantity: Number(document.getElementById(`qty_${idMatch}`).value),
-      [isPurchase ? 'unit_cost' : 'unit_price']: Number(document.getElementById(`price_${idMatch}`).value),
+      [isPurchase ? 'unit_cost' : 'unit_price']: parseMoneyInput(document.getElementById(`price_${idMatch}`).value),
     };
   }).filter(i => i.article_id);
 
@@ -2605,7 +2635,7 @@ async function createOperation(kind) {
   if (!isPurchase) {
     payload.currency = document.getElementById('f_sale_currency').value;
     const overrideVal = document.getElementById('f_total_override').value;
-    if (overrideVal !== '') payload.total_override = Number(overrideVal);
+    if (overrideVal !== '') payload.total_override = parseMoneyInput(overrideVal);
     const quoteIdVal = document.getElementById('f_quote_id')?.value;
     if (quoteIdVal) payload.quote_id = Number(quoteIdVal);
   }
@@ -2769,7 +2799,7 @@ async function renderManualMovement() {
       <input type="hidden" id="f_mov_box">
       <div class="field-row">
         <div class="field" id="manualTypeField"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
-        <div class="field"><label>Monto</label><input id="f_mov_amount" type="number" step="0.01" placeholder="0.00"></div>
+        <div class="field"><label>Monto</label><input id="f_mov_amount" type="text" inputmode="decimal" placeholder="0,00" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)"></div>
       </div>
       <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
       <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
@@ -2868,7 +2898,7 @@ async function createCashMovement() {
           to_cash_box_id: manualToBox,
           business_unit_id: state.selectedBU,
           project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
-          amount: Number(document.getElementById('f_mov_amount').value),
+          amount: parseMoneyInput(document.getElementById('f_mov_amount').value),
           description: document.getElementById('f_mov_desc').value,
         }),
       });
@@ -2884,7 +2914,7 @@ async function createCashMovement() {
           to_cash_box_id: type === 'INCOME' ? Number(boxId) : null,
           business_unit_id: state.selectedBU,
           project_id: document.getElementById('f_mov_project').value ? Number(document.getElementById('f_mov_project').value) : null,
-          amount: Number(document.getElementById('f_mov_amount').value),
+          amount: parseMoneyInput(document.getElementById('f_mov_amount').value),
           description: document.getElementById('f_mov_desc').value,
         }),
       });
