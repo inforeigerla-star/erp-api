@@ -9,7 +9,11 @@ const state = {
   currentUser: null,
 };
 
-const fmtMoney = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtMoney = (n) => {
+  const num = Math.round(Number(n) || 0);
+  const sign = num < 0 ? '-' : '';
+  return sign + Math.abs(num).toLocaleString('en-US').replace(/,/g, '.');
+};
 const fmtQty = (n) => Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 function fmtDate(value) {
   if (!value) return '-';
@@ -1600,6 +1604,10 @@ function newQuoteModal() {
       <div class="field"><label>Depósito (opcional)</label>${searchableSelectHtml('quote_warehouse', whItems, 'Buscar depósito…', 'Sin depósito')}</div>
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
+    <div class="field"><label>Artículos</label>
+      <div class="line-items" id="lineItems"></div>
+      <button class="btn btn-sm" onclick="addLineItem('sale')">+ Agregar artículo</button>
+    </div>
     <div class="field-row">
       <div class="field"><label>Moneda</label>
         <select id="f_sale_currency" onchange="refreshAllLinePrices()">
@@ -1613,10 +1621,6 @@ function newQuoteModal() {
           <option value="si">Con IVA</option>
         </select>
       </div>
-    </div>
-    <div class="field"><label>Artículos</label>
-      <div class="line-items" id="lineItems"></div>
-      <button class="btn btn-sm" onclick="addLineItem('sale')">+ Agregar artículo</button>
     </div>
     <div class="field"><label>Observaciones (opcional)</label><input id="f_quote_notes" placeholder="Notas del presupuesto"></div>
     <div class="modal-actions">
@@ -2357,21 +2361,6 @@ function newOperationModal(kind) {
       <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…')}</div>
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
-    ${!isPurchase ? `
-    <div class="field-row">
-      <div class="field"><label>Moneda de la venta</label>
-        <select id="f_sale_currency" onchange="refreshAllLinePrices()">
-          <option value="ARS">Pesos argentinos (ARS)</option>
-          <option value="USD">Dólares (USD)</option>
-        </select>
-      </div>
-      <div class="field"><label>Precios</label>
-        <select id="f_sale_iva" onchange="refreshAllLinePrices()">
-          <option value="no">Sin IVA</option>
-          <option value="si">Con IVA</option>
-        </select>
-      </div>
-    </div>` : ''}
     <div class="field"><label>Forma de pago</label>
       <select id="f_payment" onchange="togglePaymentBoxField(${isPurchase})">
         <option value="CASH">Contado</option>
@@ -2389,6 +2378,22 @@ function newOperationModal(kind) {
       <div class="line-items" id="lineItems"></div>
       <button class="btn btn-sm" onclick="addLineItem('${kind}')">+ Agregar artículo</button>
     </div>
+
+    ${!isPurchase ? `
+    <div class="field-row">
+      <div class="field"><label>Moneda de la venta</label>
+        <select id="f_sale_currency" onchange="refreshAllLinePrices()">
+          <option value="ARS">Pesos argentinos (ARS)</option>
+          <option value="USD">Dólares (USD)</option>
+        </select>
+      </div>
+      <div class="field"><label>Precios</label>
+        <select id="f_sale_iva" onchange="refreshAllLinePrices()">
+          <option value="no">Sin IVA</option>
+          <option value="si">Con IVA</option>
+        </select>
+      </div>
+    </div>` : ''}
 
     ${!isPurchase ? `
     <div class="field">
@@ -2784,6 +2789,11 @@ async function renderManualMovement() {
           </td>
         </tr>`, 'No hay movimientos manuales esperando verificación.')}
     </div>
+
+    <div class="card" id="manualBoxHistoryCard" style="display:none">
+      <div class="card-title">Historial de movimientos — <span id="manualBoxHistoryLabel"></span></div>
+      <div id="manualBoxHistoryContent"><div class="empty-state">Cargando…</div></div>
+    </div>
   `;
 }
 function setManualMovementMode(mode) {
@@ -2799,6 +2809,28 @@ function selectManualBox(boxId) {
   document.getElementById('f_mov_box').value = boxId;
   document.getElementById('selectedBoxLabel').textContent = `${box.name} (${box.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${box.currency})`;
   document.getElementById('manualMovementForm').style.display = 'block';
+  loadManualBoxHistory(boxId, box.name);
+}
+async function loadManualBoxHistory(boxId, boxName) {
+  const card = document.getElementById('manualBoxHistoryCard');
+  const label = document.getElementById('manualBoxHistoryLabel');
+  const content = document.getElementById('manualBoxHistoryContent');
+  card.style.display = 'block';
+  label.textContent = boxName;
+  content.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  try {
+    const movements = await api(`/cash-boxes/${boxId}/movements`);
+    content.innerHTML = tableOrEmpty(movements.slice(0, 30), ['Fecha', 'Tipo', 'Monto', 'Descripción', 'Origen'], (m) => `
+      <tr>
+        <td class="mono">${fmtDate(m.created_at)}</td>
+        <td>${m.type === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
+        <td class="num ${m.type === 'INCOME' ? 'income' : 'expense'}">$ ${fmtMoney(m.amount)}</td>
+        <td>${m.description || '-'}</td>
+        <td class="mono">${m.origin_type || '-'}</td>
+      </tr>`, 'Esta caja/sobre todavía no tiene movimientos.');
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state">No se pudo cargar el historial.</div>`;
+  }
 }
 function selectManualFromBox(boxId) {
   manualFromBox = boxId;
