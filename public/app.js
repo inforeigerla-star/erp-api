@@ -2499,7 +2499,7 @@ function filterArticleOptions(id, isPurchase) {
   resultsEl.style.display = 'block';
 }
 
-async function selectArticleOption(id, articleId, isPurchase) {
+function updateLinePrice(id, articleId, isPurchase) {
   const article = artByBU().find(a => a.article_id === articleId);
   if (!article) return;
   document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
@@ -2516,6 +2516,9 @@ async function selectArticleOption(id, articleId, isPurchase) {
   document.getElementById(`price_${id}`).value = (price || 0).toFixed(2);
   document.getElementById(`artresults_${id}`).style.display = 'none';
   recalcLineItemsTotal();
+}
+async function selectArticleOption(id, articleId, isPurchase) {
+  updateLinePrice(id, articleId, isPurchase);
   if (!isPurchase) await checkLineStock(id);
 }
 async function getStockQty(articleId, warehouseId) {
@@ -2548,6 +2551,7 @@ async function checkLineStock(id) {
 }
 function showStockWarning(messageHtml) {
   return new Promise((resolve) => {
+    document.querySelectorAll('.stock-warning-overlay').forEach(el => el.remove());
     const overlay = document.createElement('div');
     overlay.className = 'stock-warning-overlay';
     overlay.innerHTML = `
@@ -2556,13 +2560,13 @@ function showStockWarning(messageHtml) {
         <div class="stock-warning-title">Stock insuficiente</div>
         <div class="stock-warning-text">${messageHtml}</div>
         <div class="stock-warning-actions">
-          <button class="btn" id="stockWarnCancel">Cancelar</button>
-          <button class="btn" id="stockWarnContinue">Continuar de todos modos</button>
+          <button class="btn" data-action="cancel">Cancelar</button>
+          <button class="btn" data-action="continue">Continuar de todos modos</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    document.getElementById('stockWarnCancel').onclick = () => { overlay.remove(); resolve(false); };
-    document.getElementById('stockWarnContinue').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.querySelector('[data-action="cancel"]').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('[data-action="continue"]').onclick = () => { overlay.remove(); resolve(true); };
   });
 }
 
@@ -2571,7 +2575,7 @@ function refreshAllLinePrices() {
   rows.forEach(row => {
     const id = row.id.replace('line_', '');
     const articleId = Number(row.dataset.articleId);
-    if (articleId) selectArticleOption(id, articleId, false);
+    if (articleId) updateLinePrice(id, articleId, false);
   });
 }
 
