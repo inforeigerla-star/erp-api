@@ -122,7 +122,7 @@ function openModal(innerHtml) {
   const modal = document.getElementById('modal');
   modal.innerHTML = innerHtml;
   backdrop.classList.add('show');
-  backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+  backdrop.onclick = null;
 }
 function closeModal() {
   document.getElementById('modalBackdrop').classList.remove('show');
@@ -1600,11 +1600,19 @@ function newQuoteModal() {
       <div class="field"><label>Depósito (opcional)</label>${searchableSelectHtml('quote_warehouse', whItems, 'Buscar depósito…', 'Sin depósito')}</div>
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
-    <div class="field"><label>Moneda</label>
-      <select id="f_sale_currency" onchange="refreshAllLinePrices()">
-        <option value="ARS">Pesos argentinos (ARS)</option>
-        <option value="USD">Dólares (USD)</option>
-      </select>
+    <div class="field-row">
+      <div class="field"><label>Moneda</label>
+        <select id="f_sale_currency" onchange="refreshAllLinePrices()">
+          <option value="ARS">Pesos argentinos (ARS)</option>
+          <option value="USD">Dólares (USD)</option>
+        </select>
+      </div>
+      <div class="field"><label>Precios</label>
+        <select id="f_sale_iva" onchange="refreshAllLinePrices()">
+          <option value="no">Sin IVA</option>
+          <option value="si">Con IVA</option>
+        </select>
+      </div>
     </div>
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
