@@ -159,6 +159,7 @@ const TRASH_TABLES = {
   'purchases': { table: 'purchase', nameCol: `('Compra #' || id)`, label: 'Compra' },
   'sales': { table: 'sale', nameCol: `('Venta #' || id)`, label: 'Venta' },
   'quotes': { table: 'quote', nameCol: `('Presupuesto #' || id)`, label: 'Presupuesto' },
+  'shipments': { table: 'shipment', nameCol: `('Remito #' || id)`, label: 'Remito de envío' },
 };
 
 async function purgeExpiredTrash() {
@@ -243,6 +244,9 @@ app.delete('/trash/:type/:id', adminRequired, async (req, res) => {
     } else if (type === 'quotes') {
       await client.query('UPDATE sale SET quote_id=NULL WHERE quote_id=$1', [id]);
       await client.query('DELETE FROM quote_item WHERE quote_id=$1', [id]);
+    } else if (type === 'shipments') {
+      await client.query('DELETE FROM shipment_item WHERE shipment_id=$1', [id]);
+      await client.query('DELETE FROM stock_movement WHERE origin_type=$1 AND origin_id=$2', ['SHIPMENT', id]);
     } else if (type === 'business-units') {
       const usedR = await client.query('SELECT COUNT(*) FROM cash_movement WHERE business_unit_id=$1', [id]);
       if (Number(usedR.rows[0].count) > 0) {
@@ -1321,6 +1325,121 @@ app.post('/sales/:id/cancel', async (req, res) => {
 });
 
 // ---------- PRESUPUESTOS ----------
+// ---------- REMITOS DE ENVÍO (préstamo/regalo, sin precios) ----------
+app.get('/shipments', async (req, res) => {
+  const r = await pool.query('SELECT * FROM shipment WHERE deleted_at IS NULL ORDER BY id DESC');
+  res.json(r.rows);
+});
+
+app.get('/shipments/:id/items', async (req, res) => {
+  const r = await pool.query(`
+    SELECT si.*, a.code, a.description
+    FROM shipment_item si JOIN article a ON a.id = si.article_id
+    WHERE si.shipment_id=$1
+  `, [req.params.id]);
+  res.json(r.rows);
+});
+
+app.get('/shipments/:id/full', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const shipR = await pool.query('SELECT * FROM shipment WHERE id=$1', [id]);
+    const shipment = shipR.rows[0];
+    if (!shipment) throw new Error('Remito no encontrado.');
+    const customerR = await pool.query('SELECT * FROM customer WHERE id=$1', [shipment.customer_id]);
+    const buR = await pool.query('SELECT * FROM business_unit WHERE id=$1', [shipment.business_unit_id]);
+    const whR = await pool.query('SELECT * FROM warehouse WHERE id=$1', [shipment.warehouse_id]);
+    const itemsR = await pool.query(`
+      SELECT si.*, a.code, a.description
+      FROM shipment_item si JOIN article a ON a.id = si.article_id
+      WHERE si.shipment_id=$1
+    `, [id]);
+    res.json({ shipment, customer: customerR.rows[0], business_unit: buR.rows[0], warehouse: whR.rows[0], items: itemsR.rows });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/shipments', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { business_unit_id, customer_id, warehouse_id, project_id, reason, notes, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+    await client.query('BEGIN');
+    const shipR = await client.query(
+      `INSERT INTO shipment (business_unit_id, customer_id, warehouse_id, project_id, reason, notes)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, reason || 'PRESTAMO', notes || null]
+    );
+    const shipment = shipR.rows[0];
+    for (const item of items) {
+      await client.query(
+        'INSERT INTO shipment_item (shipment_id, article_id, quantity) VALUES ($1,$2,$3)',
+        [shipment.id, item.article_id, item.quantity]
+      );
+    }
+    await client.query('COMMIT');
+    res.json(shipment);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.put('/shipments/:id/transport', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { carrier, delivery_notes, delivery_address } = req.body;
+    const r = await pool.query(
+      'UPDATE shipment SET carrier=$1, delivery_notes=$2, delivery_address=$3 WHERE id=$4 RETURNING *',
+      [carrier || null, delivery_notes || null, delivery_address || null, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/shipments/:id/confirm', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`UPDATE shipment SET status='CONFIRMED' WHERE id=$1`, [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/shipments/:id/cancel', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`UPDATE shipment SET status='CANCELLED' WHERE id=$1`, [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Un remito CONFIRMADO no se elimina directamente: hay que cancelarlo primero
+// (revierte el stock con historial completo). Pendiente o cancelado, "eliminar"
+// lo manda a la papelera por 30 días.
+app.delete('/shipments/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await pool.query('SELECT status FROM shipment WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Remito no encontrado.');
+    if (r.rows[0].status === 'CONFIRMED') {
+      throw new Error('Este remito está confirmado. Cancelalo primero y después vas a poder eliminarlo.');
+    }
+    await pool.query('UPDATE shipment SET deleted_at=now() WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get('/quotes', async (req, res) => {
   const r = await pool.query('SELECT * FROM quote WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);

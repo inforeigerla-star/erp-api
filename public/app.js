@@ -264,7 +264,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 // Navegación
 // ---------------------------------------------------------
 const viewTitles = {
-  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos',
+  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
   customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores', reports: 'Reportes',
 };
@@ -292,6 +292,7 @@ async function renderView() {
       case 'purchases': await renderPurchases(); break;
       case 'sales': await renderSales(); break;
       case 'quotes': await renderQuotes(); break;
+      case 'shipments': await renderShipments(); break;
       case 'articles': await renderArticles(); break;
       case 'warehouses': await renderWarehouses(); break;
       case 'suppliers': await renderSuppliers(); break;
@@ -1695,6 +1696,315 @@ async function convertQuoteToSale(id) {
   await selectQuoteToLoad(id);
 }
 
+// ---------------------------------------------------------
+// REMITOS DE ENVÍO (préstamo / regalo — sin precios, descuenta stock)
+// ---------------------------------------------------------
+async function renderShipments() {
+  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newShipmentModal()">+ Nuevo remito de envío</button>`;
+  const el = document.getElementById('view');
+  const all = await api('/shipments');
+  const rows = all.filter(s => s.business_unit_id === state.selectedBU);
+
+  el.innerHTML = `
+    <div class="hint" style="margin-bottom:14px">Para artículos que se prestan (ej: pruebas) o se regalan. Descuenta stock igual que una venta, pero no maneja precios ni cobro.</div>
+    <div class="card">${tableOrEmpty(rows, ['#', 'Cliente', 'Motivo', 'Depósito', 'Fecha', 'Estado', ''], (s) => `
+    <tr>
+      <td class="mono">#${s.id}</td>
+      <td>${customerName(s.customer_id)}</td>
+      <td>${s.reason === 'REGALO' ? 'Regalo' : 'Préstamo'}</td>
+      <td>${whByBU().find(w => w.id === s.warehouse_id)?.name || '-'}</td>
+      <td class="mono">${fmtDate(s.date)}</td>
+      <td>${statusBadge(s.status)}</td>
+      <td>
+        <button class="btn btn-sm" onclick="showShipmentDetail(${s.id})">Detalle</button>
+        ${s.status === 'PENDING' ? `<button class="btn btn-sm" onclick="confirmShipment(${s.id})">Confirmar</button>` : ''}
+        ${s.status === 'CONFIRMED' ? `<button class="btn btn-sm btn-danger" onclick="cancelShipment(${s.id})">Cancelar</button>` : ''}
+        <button class="btn btn-sm btn-danger" onclick="deleteShipment(${s.id})">Eliminar</button>
+        <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
+        <button class="btn btn-sm" onclick="openShipmentDocumentModal(${s.id})">Remito</button>
+      </td>
+    </tr>`, 'No hay remitos de envío cargados en esta unidad.')}</div>`;
+}
+function newShipmentModal() {
+  const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
+  const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  window._stockLookup = null;
+  lineItemCount = 0;
+  openModal(`
+    <h2>Nuevo remito de envío</h2>
+    <div class="field"><label>Cliente / destinatario</label>${searchableSelectHtml('ship_contact', contactItems, 'Buscar cliente…')}</div>
+    <div class="field-row">
+      <div class="field"><label>Depósito</label>${searchableSelectHtml('ship_warehouse', whItems, 'Buscar depósito…')}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('ship_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
+    </div>
+    <div class="field"><label>Motivo</label>
+      <select id="f_ship_reason">
+        <option value="PRESTAMO">Préstamo (ej: pruebas)</option>
+        <option value="REGALO">Regalo</option>
+      </select>
+    </div>
+    <div class="field"><label>Artículos</label>
+      <div class="line-items" id="lineItems"></div>
+      <button class="btn btn-sm" onclick="addShipmentLineItem()">+ Agregar artículo</button>
+    </div>
+    <div class="field"><label>Observaciones (opcional)</label><input id="f_ship_notes" placeholder="Notas de este envío"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="createShipment()">Guardar</button>
+    </div>
+  `);
+  addShipmentLineItem();
+}
+function addShipmentLineItem() {
+  const id = lineItemCount++;
+  const container = document.getElementById('lineItems');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `line_${id}`;
+  row.innerHTML = `
+    <div class="article-search-wrap">
+      <input type="text" class="article-search-input" id="artsearch_${id}" placeholder="Buscar por código, código alt. o nombre…"
+             autocomplete="off" oninput="filterShipmentArticleOptions(${id})" onfocus="filterShipmentArticleOptions(${id})">
+      <input type="hidden" id="artid_${id}">
+      <div class="article-search-results" id="artresults_${id}"></div>
+    </div>
+    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" onchange="checkShipmentLineStock(${id})">
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove();">×</button>
+  `;
+  container.appendChild(row);
+}
+async function selectShipmentArticleOption(id, articleId) {
+  const article = artByBU().find(a => a.article_id === articleId);
+  if (!article) return;
+  document.getElementById(`artsearch_${id}`).value = `${article.code} — ${article.description}`;
+  document.getElementById(`artid_${id}`).value = articleId;
+  document.getElementById(`line_${id}`).dataset.articleId = articleId;
+  document.getElementById(`artresults_${id}`).style.display = 'none';
+  await checkShipmentLineStock(id);
+}
+async function checkShipmentLineStock(id) {
+  const articleId = Number(document.getElementById(`artid_${id}`)?.value);
+  const qty = Number(document.getElementById(`qty_${id}`)?.value);
+  const warehouseId = Number(getSearchableValue('ship_warehouse'));
+  if (!articleId || !warehouseId || !(qty > 0)) return;
+
+  const available = await getStockQty(articleId, warehouseId);
+  if (available == null || qty <= available) return;
+
+  const article = artByBU().find(a => a.article_id === articleId);
+  const ok = await showStockWarning(
+    `El artículo <strong>${article ? article.code + ' — ' + article.description : ''}</strong> no tiene stock suficiente en este depósito.<br>Disponible: <strong>${fmtQty(available)}</strong> — Estás cargando: <strong>${fmtQty(qty)}</strong>.<br><br>Si continuás, el stock de este artículo va a quedar en negativo.`
+  );
+  if (!ok) {
+    document.getElementById(`qty_${id}`).value = available > 0 ? available : '';
+  }
+}
+async function createShipment() {
+  const rows = [...document.getElementById('lineItems').children];
+  const items = rows.map(row => {
+    const idMatch = row.id.replace('line_', '');
+    return {
+      article_id: Number(document.getElementById(`artid_${idMatch}`).value),
+      quantity: Number(document.getElementById(`qty_${idMatch}`).value),
+    };
+  }).filter(i => i.article_id);
+
+  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return; }
+  try {
+    await api('/shipments', {
+      method: 'POST',
+      body: JSON.stringify({
+        business_unit_id: state.selectedBU,
+        customer_id: Number(getSearchableValue('ship_contact')),
+        warehouse_id: Number(getSearchableValue('ship_warehouse')),
+        project_id: getSearchableValue('ship_project') ? Number(getSearchableValue('ship_project')) : null,
+        reason: document.getElementById('f_ship_reason').value,
+        notes: document.getElementById('f_ship_notes').value,
+        items,
+      }),
+    });
+    closeModal();
+    toast('Remito de envío creado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function showShipmentDetail(id) {
+  const items = await api(`/shipments/${id}/items`);
+  openModal(`
+    <h2>Detalle — Remito de envío #${id}</h2>
+    ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad'], (i) => `
+      <tr><td class="mono">${i.code}</td><td>${i.description}</td><td class="num">${fmtQty(i.quantity)}</td></tr>`, 'Sin artículos.')}
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cerrar</button>
+      <button class="btn" onclick="openShipmentDocumentModal(${id})">Remito</button>
+    </div>
+  `);
+}
+async function confirmShipment(id) {
+  try {
+    await api(`/shipments/${id}/confirm`, { method: 'POST' });
+    toast('Remito confirmado. Stock actualizado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function cancelShipment(id) {
+  if (!confirm('¿Confirmás cancelar este remito? El stock vuelve a sumarse.')) return;
+  try {
+    await api(`/shipments/${id}/cancel`, { method: 'POST' });
+    toast('Remito cancelado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteShipment(id) {
+  if (!confirm(`¿Eliminar el remito #${id}? Si está confirmado, primero hay que cancelarlo.`)) return;
+  try {
+    await api(`/shipments/${id}`, { method: 'DELETE' });
+    toast('Eliminado correctamente.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function openShipmentDocumentModal(id) {
+  openModal(`
+    <h2>Datos de entrega — Remito #${id}</h2>
+    <div class="field"><label>Transportista (opcional)</label><input id="f_ship_carrier" placeholder="Ej: transporte propio…"></div>
+    <div class="field"><label>Lugar de entrega (opcional)</label><input id="f_ship_delivery_address" placeholder="Se usa la dirección del cliente si lo dejás vacío"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitShipmentDocument(${id})">Generar remito</button>
+    </div>
+  `);
+}
+async function submitShipmentDocument(id) {
+  try {
+    await api(`/shipments/${id}/transport`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        carrier: document.getElementById('f_ship_carrier').value,
+        delivery_address: document.getElementById('f_ship_delivery_address').value,
+      }),
+    });
+    const data = await api(`/shipments/${id}/full`);
+    const html = buildShipmentDocumentHtml(data);
+    const win = window.open('', '_blank');
+    win.document.write(html);
+    win.document.close();
+    closeModal();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function buildShipmentDocumentHtml({ shipment, customer, business_unit, warehouse, items }) {
+  const logo = buLogoPath(business_unit.name);
+  const number = docNumber(shipment.id);
+  const dateStr = fmtDate(shipment.date);
+  const reasonLabel = shipment.reason === 'REGALO' ? 'Regalo' : 'Préstamo';
+
+  const itemsRows = items.map(i => `
+    <tr>
+      <td class="mono">${i.code}</td>
+      <td>${i.description}</td>
+      <td class="num">${fmtQty(i.quantity)}</td>
+    </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Remito de envío — ${business_unit.name} #${number}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; margin: 0; padding: 0; font-size: 13px; }
+  .sheet { max-width: 760px; margin: 0 auto; padding: 10px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1a1a1a; padding-bottom: 18px; margin-bottom: 24px; }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .header-left img { height: 56px; width: auto; }
+  .company-name { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+  .company-sub { font-size: 11px; color: #666; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-title { font-size: 15px; font-weight: 700; letter-spacing: 0.05em; color: #1a1a1a; }
+  .doc-number { font-family: 'Courier New', monospace; font-size: 13px; color: #444; margin-top: 4px; }
+  .doc-date { font-size: 12px; color: #666; margin-top: 2px; }
+  .section-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: #888; font-weight: 700; margin-bottom: 8px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; }
+  .info-box { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; }
+  .info-row { font-size: 12.5px; margin-bottom: 4px; }
+  .info-row strong { color: #333; }
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+  table.items th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; font-weight: 700; padding: 8px 6px; border-bottom: 2px solid #1a1a1a; }
+  table.items td { padding: 9px 6px; border-bottom: 1px solid #eee; font-size: 12.5px; }
+  .num { text-align: right; font-family: 'Courier New', monospace; }
+  .transport-box { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin-bottom: 28px; }
+  .signature-area { display: flex; justify-content: space-between; margin-top: 60px; }
+  .signature-line { border-top: 1px solid #333; width: 220px; text-align: center; font-size: 11px; color: #666; padding-top: 6px; }
+  .footer-note { font-size: 10.5px; color: #999; text-align: center; margin-top: 40px; border-top: 1px solid #eee; padding-top: 12px; }
+  .actions { max-width: 760px; margin: 0 auto 20px; display: flex; gap: 10px; padding: 0 10px; }
+  .actions button, .actions a { font-family: inherit; font-size: 13px; padding: 9px 16px; border-radius: 7px; border: 1px solid #ccc; background: #fff; cursor: pointer; text-decoration: none; color: #1a1a1a; }
+  @media print { .actions { display: none; } body { font-size: 12.5px; } }
+</style>
+</head>
+<body>
+  <div class="actions no-print">
+    <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el remito #${number} de ${business_unit.name}.`)}" target="_blank">📱 Enviar por WhatsApp</a>` : ''}
+    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`Remito de envío #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el remito de envío #${number} (${reasonLabel}).\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">✉️ Enviar por email</a>` : ''}
+  </div>
+
+  <div class="sheet">
+    <div class="header">
+      <div class="header-left">
+        <img src="${logo}" alt="${business_unit.name}">
+        <div>
+          <div class="company-name">${business_unit.name.toUpperCase()}</div>
+          <div class="company-sub">You One Racing S.A.S.</div>
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="doc-title">REMITO DE ENVÍO</div>
+        <div class="doc-number">N° ${number}</div>
+        <div class="doc-date">${dateStr}</div>
+      </div>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="section-title">Destinatario</div>
+        <div class="info-row"><strong>${customer.name}</strong></div>
+        ${customer.tax_id ? `<div class="info-row">CUIT/Tax ID: ${customer.tax_id}</div>` : ''}
+        <div class="info-row">${formatCustomerAddress(customer) || '—'}</div>
+        ${customer.phone ? `<div class="info-row">Tel: ${customer.phone}</div>` : ''}
+      </div>
+      <div class="info-box">
+        <div class="section-title">Detalle del envío</div>
+        <div class="info-row"><strong>Motivo:</strong> ${reasonLabel}</div>
+        <div class="info-row">Depósito de origen: ${warehouse?.name || '-'}</div>
+      </div>
+    </div>
+
+    <table class="items">
+      <thead><tr><th>Código</th><th>Descripción</th><th style="text-align:right">Cantidad</th></tr></thead>
+      <tbody>${itemsRows}</tbody>
+    </table>
+
+    <div class="transport-box">
+      <div class="section-title">Lugar de entrega</div>
+      <div class="info-row">${shipment.delivery_address || formatCustomerAddress(customer) || '—'}</div>
+    </div>
+    <div class="transport-box">
+      <div class="section-title">Transporte</div>
+      <div class="info-row"><strong>Transportista:</strong> ${shipment.carrier || '—'}</div>
+      ${shipment.notes ? `<div class="info-row"><strong>Observaciones:</strong> ${shipment.notes}</div>` : ''}
+    </div>
+    <div class="signature-area">
+      <div class="signature-line">Firma transportista</div>
+      <div class="signature-line">Recibí conforme — Aclaración y DNI</div>
+    </div>
+
+    <div class="footer-note">${business_unit.name} — You One Racing S.A.S. · Este documento no representa una operación de venta (${reasonLabel}) · Generado el ${fmtDate(new Date().toISOString())}</div>
+  </div>
+</body>
+</html>`;
+}
+
 let salesSubTab = 'sales';
 let salesPage = 1;
 let salesDateFrom = '';
@@ -2526,6 +2836,28 @@ function filterArticleOptions(id, isPurchase) {
       </div>
     `).join('');
   }
+  resultsEl.style.display = 'block';
+}
+function filterShipmentArticleOptions(id) {
+  const query = document.getElementById(`artsearch_${id}`).value.trim().toLowerCase();
+  const resultsEl = document.getElementById(`artresults_${id}`);
+  const articles = artByBU();
+
+  const matches = query
+    ? articles.filter(a =>
+        (a.code || '').toLowerCase().includes(query) ||
+        (a.alt_code || '').toLowerCase().includes(query) ||
+        (a.description || '').toLowerCase().includes(query))
+    : articles;
+
+  resultsEl.innerHTML = !matches.length
+    ? `<div class="article-search-empty">Sin resultados</div>`
+    : matches.slice(0, 30).map(a => `
+      <div class="article-search-item" onclick="selectShipmentArticleOption(${id}, ${a.article_id})">
+        <span class="article-search-code">${a.code}${a.alt_code ? ' · ' + a.alt_code : ''}</span>
+        <span class="article-search-desc">${a.description}</span>
+      </div>
+    `).join('');
   resultsEl.style.display = 'block';
 }
 
