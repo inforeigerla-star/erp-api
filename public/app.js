@@ -2081,6 +2081,7 @@ async function renderSales() {
             <td>
               <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
               <button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>
+              <button class="btn btn-sm" onclick="openBankConversionModal(${s.id}, ${s.remaining_amount})">Cobro con conversión bancaria</button>
             </td>
             <td style="white-space:nowrap">
               <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
@@ -2101,13 +2102,14 @@ async function renderSales() {
       <div class="card">
         <div class="card-title">Cobros que todavía no se movieron físicamente a su caja/sobre</div>
         <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el dinero cobrado en una venta ya se guardó realmente en la caja o sobre elegido. Hasta que se verifique, no afecta el saldo de esa caja.</div>
-        ${tableOrEmpty(verifyBU, ['Fecha', 'Venta', 'Cliente', 'Caja / Sobre destino', 'Monto', ''], (p) => `
+        ${tableOrEmpty(verifyBU, ['Fecha', 'Venta', 'Cliente', 'Movimiento', 'Caja / Sobre', 'Monto', ''], (p) => `
           <tr>
             <td class="mono">${fmtDate(p.created_at)}</td>
             <td class="mono">#${p.sale_id}</td>
             <td>${p.customer_name}</td>
+            <td>${p.direction === 'OUT' ? '<span class="hint">↑ Egreso</span>' : '<span class="hint">↓ Ingreso</span>'}</td>
             <td>${p.cash_box_name}</td>
-            <td class="num income">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
+            <td class="num ${p.direction === 'OUT' ? 'expense' : 'income'}">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
             <td>
               <button class="btn btn-sm btn-primary" onclick="verifySaleCollection(${p.id})">Confirmar movimiento físico</button>
               <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
@@ -2166,7 +2168,7 @@ async function renderSales() {
 }
 function saleCashBoxDisplay(sale, collections) {
   if (collections && collections.length) {
-    return collections.map(c => `${c.cash_box_name} <span class="hint">(${c.kind === 'SOBRE' ? 'Sobre' : 'Caja'}${c.verified ? '' : ' · sin verificar'})</span>`).join('<br>');
+    return collections.map(c => `${c.cash_box_name} <span class="hint">(${c.kind === 'SOBRE' ? 'Sobre' : 'Caja'}${c.direction === 'OUT' ? ' · egreso USD' : ''}${c.verified ? '' : ' · sin verificar'})</span>`).join('<br>');
   }
   if (sale.cash_box_id) {
     const box = state.cache.cashBoxes.find(b => b.id === sale.cash_box_id);
@@ -2270,6 +2272,98 @@ async function submitCollect(saleId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ---------------------------------------------------------
+// COBRO CON CONVERSIÓN BANCARIA (ARS por transferencia -> USD entregado físicamente)
+// ---------------------------------------------------------
+async function openBankConversionModal(saleId, remaining) {
+  const usdBoxItems = state.cache.cashBoxes.filter(b => b.currency === 'USD').map(b => ({ id: b.id, label: b.name }));
+  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  window._bankConvBoxItems = usdBoxItems;
+  window._bankConvProjItems = projItems;
+
+  openModal(`
+    <h2>Cobro con conversión bancaria — Venta #${saleId}</h2>
+    <div class="hint" style="margin-bottom:14px">
+      El cliente pagó el saldo pendiente (<strong>$ ${fmtMoney(remaining)}</strong>) por transferencia a un banco.
+      Ese dinero NO entra a ninguna caja del sistema. A cambio, la empresa entrega dólares físicos:
+      elegí de qué sobre/caja salen y entre cuáles se reparten.
+    </div>
+    <div class="form-row">
+      <label>Banco</label>
+      <input type="text" id="bcBank" value="Banco Macro">
+    </div>
+    <div class="form-row">
+      <label>Equivalente en USD (monto final decidido, sin calcular tipo de cambio)</label>
+      <input type="text" inputmode="decimal" id="bcUsd" placeholder="Ej: 14200" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
+    </div>
+    <div class="form-row">
+      <label>Notas (opcional)</label>
+      <input type="text" id="bcNotes" placeholder="Referencia, comprobante, etc.">
+    </div>
+    <div class="form-row">
+      <label>Sobre/caja de origen — de dónde salen los dólares</label>
+      ${searchableSelectHtml('bcOrigin', window._bankConvBoxItems, 'Buscar caja en USD…')}
+    </div>
+    <div class="card-title" style="margin-top:16px">Distribuir esos dólares entre sobres/cajas destino</div>
+    <div class="line-items" id="bcSplits"></div>
+    <button class="btn btn-sm" onclick="addBankConvSplit()">+ Agregar caja</button>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitBankConversion(${saleId}, ${remaining})">Confirmar conversión</button>
+    </div>
+  `);
+  addBankConvSplit();
+}
+let bcSplitCount = 0;
+function addBankConvSplit() {
+  const id = bcSplitCount++;
+  const container = document.getElementById('bcSplits');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `bcsplit_${id}`;
+  row.innerHTML = `
+    ${searchableSelectHtml(`bcbox_${id}`, window._bankConvBoxItems, 'Buscar caja en USD…')}
+    <input type="text" inputmode="decimal" placeholder="Monto USD" id="bcamount_${id}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
+    ${searchableSelectHtml(`bcproj_${id}`, window._bankConvProjItems, 'Buscar proyecto…', 'Sin proyecto')}
+    <button class="remove-line" onclick="document.getElementById('bcsplit_${id}').remove()">×</button>
+  `;
+  container.appendChild(row);
+}
+async function submitBankConversion(saleId, amountArs) {
+  const bank_name = document.getElementById('bcBank').value.trim();
+  const usd_equivalent = parseMoneyInput(document.getElementById('bcUsd').value);
+  const notes = document.getElementById('bcNotes').value.trim();
+  const origin_cash_box_id = Number(getSearchableValue('bcOrigin'));
+
+  const rows = [...document.getElementById('bcSplits').children];
+  const destination_splits = rows.map(row => {
+    const idx = row.id.replace('bcsplit_', '');
+    return {
+      cash_box_id: Number(getSearchableValue(`bcbox_${idx}`)),
+      amount: parseMoneyInput(document.getElementById(`bcamount_${idx}`).value),
+      project_id: getSearchableValue(`bcproj_${idx}`) ? Number(getSearchableValue(`bcproj_${idx}`)) : null,
+    };
+  }).filter(s => s.amount > 0);
+
+  if (!bank_name) { toast('Indicá el banco.', 'error'); return; }
+  if (!usd_equivalent || usd_equivalent <= 0) { toast('Indicá el equivalente en dólares.', 'error'); return; }
+  if (!origin_cash_box_id) { toast('Elegí la caja/sobre de origen.', 'error'); return; }
+  if (!destination_splits.length) { toast('Agregá al menos una caja/sobre destino.', 'error'); return; }
+
+  try {
+    await api(`/sales/${saleId}/bank-conversion`, {
+      method: 'POST',
+      body: JSON.stringify({
+        bank_name, amount_ars: amountArs, usd_equivalent, notes,
+        origin_cash_box_id, destination_splits,
+      }),
+    });
+    closeModal();
+    toast('Conversión registrada. Los movimientos en dólares quedan pendientes en "Verificar cobros".');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function opActions(kind, op) {
   if (op.status === 'PENDING') {
     return `
@@ -2366,9 +2460,14 @@ async function renderDebtors() {
   `;
 }
 async function showSaleDetail(saleId) {
-  const items = await api(`/sales/${saleId}/items`);
+  const [items, full] = await Promise.all([
+    api(`/sales/${saleId}/items`),
+    api(`/sales/${saleId}/full`).catch(() => null),
+  ]);
+  const bc = full?.bank_conversion;
   openModal(`
     <h2>Detalle — Venta #${saleId}</h2>
+    ${bc ? `<div class="hint" style="margin-bottom:14px">💵 Cobrada por conversión bancaria: <strong>$ ${fmtMoney(bc.amount_ars)}</strong> vía ${bc.bank_name} → <strong>US$ ${fmtMoney(bc.usd_equivalent)}</strong>${bc.notes ? ` · ${bc.notes}` : ''}</div>` : ''}
     ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad', 'Precio unit.', 'Subtotal'], (i) => `
       <tr>
         <td class="mono">${i.code}</td>

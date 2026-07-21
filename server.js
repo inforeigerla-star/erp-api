@@ -1303,11 +1303,17 @@ app.post('/sales/:id/cancel', async (req, res) => {
     const collections = await client.query('SELECT * FROM sale_collection WHERE sale_id=$1', [id]);
     for (const sc of collections.rows) {
       if (sc.verified) {
-        // Ya impactó en la caja: generar el egreso de reversa
+        // Ya impactó en la caja: generar el movimiento de reversa, en el sentido
+        // opuesto al original (IN verificado como INCOME -> reversa EXPENSE;
+        // OUT verificado como EXPENSE, ej. conversión bancaria -> reversa INCOME).
+        const reversalType = sc.direction === 'OUT' ? 'INCOME' : 'EXPENSE';
+        const reversalDesc = sc.direction === 'OUT'
+          ? `Reversa entrega USD (conversión bancaria) Venta #${id}`
+          : `Reversa cobro Venta #${id}`;
         await client.query(
           `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
-           VALUES ($1,$2,$3,'EXPENSE',$4,$5,'SALE',$6)`,
-          [sc.cash_session_id, sc.business_unit_id, sc.project_id, sc.amount, `Reversa cobro Venta #${id}`, id]
+           VALUES ($1,$2,$3,$4,$5,$6,'SALE',$7)`,
+          [sc.cash_session_id, sc.business_unit_id, sc.project_id, reversalType, sc.amount, reversalDesc, id]
         );
       }
       await client.query('DELETE FROM sale_collection WHERE id=$1', [sc.id]);
@@ -1532,7 +1538,8 @@ app.get('/sales/:id/full', async (req, res) => {
       FROM sale_item si JOIN article a ON a.id = si.article_id
       WHERE si.sale_id=$1
     `, [id]);
-    res.json({ sale, customer: customerR.rows[0], business_unit: buR.rows[0], warehouse: whR.rows[0], items: itemsR.rows });
+    const bankConvR = await pool.query('SELECT * FROM sale_bank_conversion WHERE sale_id=$1', [id]);
+    res.json({ sale, customer: customerR.rows[0], business_unit: buR.rows[0], warehouse: whR.rows[0], items: itemsR.rows, bank_conversion: bankConvR.rows[0] || null });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -1656,7 +1663,7 @@ app.get('/sale-collections/pending', async (req, res) => {
 
 app.get('/sale-collections/by-business-unit/:businessUnitId', async (req, res) => {
   const r = await pool.query(`
-    SELECT sc.sale_id, sc.verified, cb.id AS cash_box_id, cb.name AS cash_box_name, cb.kind AS cash_box_kind, sc.amount
+    SELECT sc.sale_id, sc.verified, sc.direction, cb.id AS cash_box_id, cb.name AS cash_box_name, cb.kind AS cash_box_kind, sc.amount
     FROM sale_collection sc
     JOIN cash_box cb ON cb.id = sc.cash_box_id
     WHERE sc.business_unit_id = $1
@@ -1675,10 +1682,16 @@ app.post('/sale-collections/:id/verify', async (req, res) => {
     if (!sc) throw new Error('Cobro no encontrado.');
     if (sc.verified) throw new Error('Este cobro ya fue verificado.');
 
+    // direction='OUT' (conversión bancaria): los dólares salen de esta caja -> EXPENSE.
+    // direction='IN' (todo lo de siempre): el cobro entra a esta caja -> INCOME.
+    const movementType = sc.direction === 'OUT' ? 'EXPENSE' : 'INCOME';
+    const movementDesc = sc.direction === 'OUT'
+      ? `Entrega de USD por conversión bancaria — Venta #${sc.sale_id}`
+      : `Cobro Venta #${sc.sale_id} (verificado)`;
     const movR = await client.query(
       `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
-       VALUES ($1,$2,$3,'INCOME',$4,$5,'SALE',$6) RETURNING id`,
-      [sc.cash_session_id, sc.business_unit_id, sc.project_id, sc.amount, `Cobro Venta #${sc.sale_id} (verificado)`, sc.sale_id]
+       VALUES ($1,$2,$3,$4,$5,$6,'SALE',$7) RETURNING id`,
+      [sc.cash_session_id, sc.business_unit_id, sc.project_id, movementType, sc.amount, movementDesc, sc.sale_id]
     );
 
     await client.query(
@@ -1706,7 +1719,11 @@ app.post('/sale-collections/:id/reject', async (req, res) => {
     if (!sc) throw new Error('Cobro no encontrado.');
     if (sc.verified) throw new Error('Este cobro ya fue verificado, no se puede rechazar así.');
 
-    await client.query('UPDATE sale SET settled_amount = settled_amount - $1 WHERE id=$2', [sc.amount, sc.sale_id]);
+    // Las filas de conversión bancaria (IN y OUT) no suman/restan contra settled_amount
+    // por fila: la venta ya se cerró en pesos de una sola vez al crear la conversión.
+    if (sc.affects_settled_amount) {
+      await client.query('UPDATE sale SET settled_amount = settled_amount - $1 WHERE id=$2', [sc.amount, sc.sale_id]);
+    }
     await client.query('DELETE FROM sale_collection WHERE id=$1', [id]);
 
     await client.query('COMMIT');
@@ -1768,6 +1785,109 @@ app.post('/sales/:id/collect', async (req, res) => {
     await client.query('COMMIT');
     const updated = await pool.query('SELECT * FROM sale_pending_collection WHERE id=$1', [id]);
     res.json(updated.rows[0] || { ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Cobro con conversión bancaria: el cliente pagó el saldo pendiente por
+// transferencia a un banco (ej. Banco Macro) en pesos. Esos pesos NO generan
+// ningún movimiento de caja (quedan solo registrados acá, como referencia).
+// La empresa entrega en cambio un monto en USD decidido manualmente por
+// Matias (sin cálculo de TC), que sale de UNA caja/sobre de origen y se
+// reparte entre una o varias cajas/sobres destino. Esos dólares sí usan el
+// mismo mecanismo de siempre (sale_collection + cash_movement) y quedan
+// pendientes en "Verificar cobros" hasta que se confirme el movimiento físico.
+app.post('/sales/:id/bank-conversion', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { bank_name, amount_ars, usd_equivalent, notes, origin_cash_box_id, origin_project_id, destination_splits } = req.body;
+
+    if (!bank_name) throw new Error('Indicá el banco (ej. Banco Macro).');
+    if (!amount_ars || Number(amount_ars) <= 0) throw new Error('El monto en pesos debe ser mayor a cero.');
+    if (!usd_equivalent || Number(usd_equivalent) <= 0) throw new Error('Indicá el equivalente en dólares.');
+    if (!origin_cash_box_id) throw new Error('Elegí la caja/sobre de origen de los dólares.');
+    if (!destination_splits || !destination_splits.length) throw new Error('Agregá al menos una caja/sobre destino.');
+
+    const destTotal = destination_splits.reduce((a, s) => a + Number(s.amount), 0);
+    if (Math.abs(destTotal - Number(usd_equivalent)) > 0.01) {
+      throw new Error(`La distribución entre cajas destino ($${destTotal}) debe ser igual al equivalente en dólares ($${usd_equivalent}).`);
+    }
+
+    await client.query('BEGIN');
+
+    const saleR = await client.query('SELECT * FROM sale WHERE id=$1 FOR UPDATE', [id]);
+    const sale = saleR.rows[0];
+    if (!sale) throw new Error('Venta no encontrada.');
+    if (!['UNCOLLECTED', 'ACCOUNT', 'CASH'].includes(sale.payment_type)) throw new Error('Tipo de venta no admite procesar cobro.');
+
+    const remaining = Number(sale.total_amount) - Number(sale.settled_amount);
+    if (remaining <= 0.01) throw new Error('Esta venta ya está cobrada.');
+    if (Math.abs(Number(amount_ars) - remaining) > 0.01) {
+      throw new Error(`El monto en pesos ($${amount_ars}) debe coincidir con el saldo pendiente de la venta ($${remaining}).`);
+    }
+
+    const existing = await client.query('SELECT id FROM sale_bank_conversion WHERE sale_id=$1', [id]);
+    if (existing.rows[0]) throw new Error('Esta venta ya tiene una conversión bancaria registrada.');
+
+    const originR = await client.query('SELECT * FROM cash_box WHERE id=$1', [origin_cash_box_id]);
+    const originBox = originR.rows[0];
+    if (!originBox) throw new Error('La caja/sobre de origen no existe.');
+    if (originBox.currency !== 'USD') throw new Error('La caja/sobre de origen debe ser en dólares.');
+
+    // Registro de trazabilidad de los pesos recibidos: NO toca cash_box ni cash_movement.
+    const conv = await client.query(
+      `INSERT INTO sale_bank_conversion (sale_id, bank_name, amount_ars, usd_equivalent, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [id, bank_name, amount_ars, usd_equivalent, notes || null, req.user.id]
+    );
+
+    // El cliente ya pagó: se cierra el saldo en pesos de la venta de una sola vez,
+    // sin crear ningún sale_collection/cash_movement para ese monto.
+    await client.query('UPDATE sale SET settled_amount = total_amount WHERE id=$1', [id]);
+
+    // Egreso pendiente de verificar: los dólares que salen de la caja/sobre de origen.
+    const originSessR = await client.query(
+      `SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`,
+      [origin_cash_box_id]
+    );
+    const originSess = originSessR.rows[0];
+    if (!originSess) throw new Error(`${originBox.name} no tiene una sesión abierta.`);
+
+    await client.query(
+      `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, direction, affects_settled_amount, verified)
+       VALUES ($1,$2,$3,$4,$5,$6,'OUT',FALSE,FALSE)`,
+      [sale.id, origin_cash_box_id, originSess.id, sale.business_unit_id, origin_project_id || null, usd_equivalent]
+    );
+
+    // Ingresos pendientes de verificar: los dólares que entran a cada caja/sobre destino.
+    for (const split of destination_splits) {
+      const boxR = await client.query('SELECT * FROM cash_box WHERE id=$1', [split.cash_box_id]);
+      const box = boxR.rows[0];
+      if (!box) throw new Error('Una de las cajas/sobres destino no existe.');
+      if (box.currency !== 'USD') throw new Error(`${box.name} no es una caja en dólares.`);
+
+      const sessR = await client.query(
+        `SELECT id FROM cash_session WHERE cash_box_id=$1 AND status='OPEN' LIMIT 1`,
+        [split.cash_box_id]
+      );
+      const sess = sessR.rows[0];
+      if (!sess) throw new Error(`${box.name} no tiene una sesión abierta.`);
+
+      await client.query(
+        `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, direction, affects_settled_amount, verified)
+         VALUES ($1,$2,$3,$4,$5,$6,'IN',FALSE,FALSE)`,
+        [sale.id, split.cash_box_id, sess.id, sale.business_unit_id, split.project_id || null, split.amount]
+      );
+    }
+
+    await client.query('COMMIT');
+    const updated = await pool.query('SELECT * FROM sale WHERE id=$1', [id]);
+    res.json({ sale: updated.rows[0], bank_conversion: conv.rows[0] });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
