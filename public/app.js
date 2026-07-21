@@ -2368,6 +2368,7 @@ function opActions(kind, op) {
   if (op.status === 'PENDING') {
     return `
       <button class="btn btn-sm" onclick="confirmOperation('${kind}', ${op.id})">Confirmar</button>
+      <button class="btn btn-sm" onclick="openEditDateModal('${kind}', ${op.id}, '${String(op.date).slice(0, 10)}')">Editar fecha</button>
       <button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>
     `;
   }
@@ -2375,6 +2376,29 @@ function opActions(kind, op) {
     return `<button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>`;
   }
   return '-';
+}
+function openEditDateModal(kind, id, currentDate) {
+  openModal(`
+    <h2>Editar fecha</h2>
+    <div class="hint" style="margin-bottom:14px">Solo se puede cambiar mientras la operación esté pendiente. Una vez confirmada, la fecha queda fija.</div>
+    <div class="field"><label>Fecha</label>
+      <input type="date" id="editDateInput" value="${currentDate}">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitEditDate('${kind}', ${id})">Guardar</button>
+    </div>
+  `);
+}
+async function submitEditDate(kind, id) {
+  const date = document.getElementById('editDateInput').value;
+  if (!date) { toast('Elegí una fecha.', 'error'); return; }
+  try {
+    await api(`/${kind}/${id}/date`, { method: 'PUT', body: JSON.stringify({ date }) });
+    closeModal();
+    toast('Fecha actualizada.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 async function confirmOperation(kind, id) {
   try {
@@ -2796,6 +2820,9 @@ function newOperationModal(kind) {
     <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
       ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`)}
     </div>
+    <div class="field"><label>Fecha</label>
+      <input type="date" id="f_date" value="${new Date().toISOString().slice(0, 10)}">
+    </div>
     <div class="field-row">
       <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…')}</div>
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
@@ -3060,6 +3087,7 @@ async function createOperation(kind) {
     project_id: getSearchableValue('project') ? Number(getSearchableValue('project')) : null,
     payment_type: document.getElementById('f_payment').value,
     cash_box_id: (!isPurchase && document.getElementById('f_payment').value === 'CASH') ? Number(getSearchableValue('cashbox')) : null,
+    date: document.getElementById('f_date').value || undefined,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));

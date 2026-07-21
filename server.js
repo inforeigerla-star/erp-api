@@ -950,13 +950,16 @@ app.delete('/cash-movements/:id', async (req, res) => {
 app.post('/purchases', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, items } = req.body;
+    const { business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, items, date } = req.body;
     await client.query('BEGIN');
 
+    // Fecha editable: si no viene del formulario, se usa hoy (mismo comportamiento que antes).
+    const dateValue = date || new Date().toISOString().slice(0, 10);
+
     const purchaseR = await client.query(
-      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [business_unit_id, supplier_id, warehouse_id, project_id || null, cash_box_id || null, payment_type]
+      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [business_unit_id, supplier_id, warehouse_id, project_id || null, cash_box_id || null, payment_type, dateValue]
     );
     const purchase = purchaseR.rows[0];
 
@@ -985,6 +988,23 @@ app.post('/purchases/:id/confirm', async (req, res) => {
     await pool.query(`UPDATE purchase SET status='CONFIRMED' WHERE id=$1`, [id]);
     const r = await pool.query('SELECT * FROM purchase_detail WHERE purchase_id=$1', [id]);
     res.json(r.rows);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Editar la fecha de una compra: solo mientras está PENDING, para no alterar
+// el historial de algo ya confirmado (movió stock/caja con esa fecha).
+app.put('/purchases/:id/date', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.body;
+    if (!date) throw new Error('Indicá una fecha.');
+    const r = await pool.query('SELECT status FROM purchase WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Compra no encontrada.');
+    if (r.rows[0].status !== 'PENDING') throw new Error('Solo se puede editar la fecha mientras la compra está pendiente.');
+    const updated = await pool.query('UPDATE purchase SET date=$1 WHERE id=$2 RETURNING *', [date, id]);
+    res.json(updated.rows[0]);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -1246,13 +1266,16 @@ app.delete('/purchases/:id', async (req, res) => {
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, quote_id, items } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, quote_id, items, date } = req.body;
     await client.query('BEGIN');
 
+    // Fecha editable: si no viene del formulario, se usa hoy (mismo comportamiento que antes).
+    const dateValue = date || new Date().toISOString().slice(0, 10);
+
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS', quote_id || null]
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id, date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS', quote_id || null, dateValue]
     );
     const sale = saleR.rows[0];
 
@@ -1289,6 +1312,23 @@ app.post('/sales/:id/confirm', async (req, res) => {
     await pool.query(`UPDATE sale SET status='CONFIRMED' WHERE id=$1`, [id]);
     const r = await pool.query('SELECT * FROM sale_detail WHERE sale_id=$1', [id]);
     res.json(r.rows);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Editar la fecha de una venta: solo mientras está PENDING, para no alterar
+// el historial de algo ya confirmado (movió stock/caja con esa fecha).
+app.put('/sales/:id/date', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.body;
+    if (!date) throw new Error('Indicá una fecha.');
+    const r = await pool.query('SELECT status FROM sale WHERE id=$1', [id]);
+    if (!r.rows[0]) throw new Error('Venta no encontrada.');
+    if (r.rows[0].status !== 'PENDING') throw new Error('Solo se puede editar la fecha mientras la venta está pendiente.');
+    const updated = await pool.query('UPDATE sale SET date=$1 WHERE id=$2 RETURNING *', [date, id]);
+    res.json(updated.rows[0]);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
