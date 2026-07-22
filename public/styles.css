@@ -278,6 +278,14 @@ button, input, select { font-family: inherit; font-size: inherit; }
   letter-spacing: 0.07em;
   margin: 0 0 16px 0;
 }
+.section-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 
 /* ---------- TABLES ---------- */
 table.ledger { width: 100%; border-collapse: collapse; }

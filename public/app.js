@@ -475,31 +475,19 @@ function reportsApplyDateFilter() {
 
 async function renderDashboard() {
   const el = document.getElementById('view');
-  const [purchases, sales, stock, profitability] = await Promise.all([
-    api('/purchases'), api('/sales'), api('/stock'), api('/projects/profitability'),
-  ]);
-  const buPurchases = purchases.filter(p => p.business_unit_id === state.selectedBU);
-  const buSales = sales.filter(s => s.business_unit_id === state.selectedBU);
-  const buWarehouseIds = whByBU().map(w => w.id);
-  const buStock = stock.filter(s => buWarehouseIds.includes(s.warehouse_id));
-  const buProjects = projByBU();
-  const buProfit = profitability.filter(p => buProjects.some(bp => bp.id === p.project_id));
-
-  const totalPurchases = buPurchases.filter(p => p.status === 'CONFIRMED').reduce((a, p) => a + Number(p.total_amount), 0);
-  const totalSales = buSales.filter(s => s.status === 'CONFIRMED').reduce((a, s) => a + Number(s.total_amount), 0);
-  const stockUnits = buStock.reduce((a, s) => a + Number(s.quantity), 0);
+  const d = await api(`/dashboard/summary?business_unit_id=${state.selectedBU}`);
 
   el.innerHTML = `
     <div class="kpi-row">
-      <div class="kpi"><div class="kpi-label">Ventas confirmadas</div><div class="kpi-value income">$ ${fmtMoney(totalSales)}</div></div>
-      <div class="kpi"><div class="kpi-label">Compras confirmadas</div><div class="kpi-value expense">$ ${fmtMoney(totalPurchases)}</div></div>
-      <div class="kpi"><div class="kpi-label">Unidades en stock</div><div class="kpi-value">${fmtQty(stockUnits)}</div></div>
-      <div class="kpi"><div class="kpi-label">Proyectos activos</div><div class="kpi-value">${buProjects.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Ventas confirmadas</div><div class="kpi-value income">$ ${fmtMoney(d.totalSales)}</div></div>
+      <div class="kpi"><div class="kpi-label">Compras confirmadas</div><div class="kpi-value expense">$ ${fmtMoney(d.totalPurchases)}</div></div>
+      <div class="kpi"><div class="kpi-label">Unidades en stock</div><div class="kpi-value">${fmtQty(d.stockUnits)}</div></div>
+      <div class="kpi"><div class="kpi-label">Proyectos activos</div><div class="kpi-value">${d.activeProjectsCount}</div></div>
     </div>
 
     <div class="card">
       <div class="card-title">Rentabilidad por proyecto (centro de costos)</div>
-      ${tableOrEmpty(buProfit, ['Proyecto', 'Ingresos', 'Egresos', 'Resultado'], (p) => `
+      ${tableOrEmpty(d.profitability, ['Proyecto', 'Ingresos', 'Egresos', 'Resultado'], (p) => `
         <tr>
           <td>${p.project_name}</td>
           <td class="num income">$ ${fmtMoney(p.total_income)}</td>
@@ -510,11 +498,7 @@ async function renderDashboard() {
 
     <div class="card">
       <div class="card-title">Últimas operaciones</div>
-      ${tableOrEmpty(
-        [...buPurchases.map(p => ({ ...p, kind: 'Compra' })), ...buSales.map(s => ({ ...s, kind: 'Venta' }))]
-          .sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8),
-        ['Tipo', 'Fecha', 'Estado', 'Total'],
-        (o) => `
+      ${tableOrEmpty(d.recentOperations, ['Tipo', 'Fecha', 'Estado', 'Total'], (o) => `
         <tr>
           <td>${o.kind}</td>
           <td class="mono">${fmtDate(o.date)}</td>
@@ -594,13 +578,18 @@ async function renderStock() {
     <button class="btn btn-sm" onclick="openStockAdjustModal()">Ajustar stock</button>
     <button class="btn btn-primary" onclick="openStockTransferModal()">Transferir entre depósitos</button>`;
   const el = document.getElementById('view');
-  const stock = await api('/stock');
-  const buWarehouseIds = whByBU().map(w => w.id);
-  const rows = stock.filter(s => buWarehouseIds.includes(s.warehouse_id));
+
+  const st = listState.stock;
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: st.page, limit: 50 });
+  if (st.search) params.set('search', st.search);
+  const { rows, total, limit } = await api(`/stock/list?${params.toString()}`);
 
   el.innerHTML = `
     <div class="card">
-      <div class="card-title">Stock por depósito — unidad seleccionada</div>
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Stock por depósito — unidad seleccionada</div>
+        ${listSearchToolbarHtml('stock', 'stockSearchInput', 'Buscar por código, descripción o depósito…')}
+      </div>
       ${tableOrEmpty(rows, ['Código', 'Artículo', 'Depósito', 'Cantidad', ''], (s) => `
         <tr ${Number(s.quantity) < 0 ? 'style="background:#FFF3E0"' : ''}>
           <td class="mono">${s.code}</td>
@@ -614,9 +603,12 @@ async function renderStock() {
             <button class="btn btn-sm btn-danger" onclick="deleteStockRow(${s.id}, '${s.description.replace(/'/g, "\\'")}')">Eliminar registro</button>
           </td>
         </tr>`, 'No hay stock cargado en esta unidad todavía. Cargá una compra confirmada para generar stock.')}
+      ${total ? paginationControlsHtml('stock', st.page, total, limit) : ''}
     </div>
   `;
+  focusPreservingSearchInput('stockSearchInput');
 }
+function stockChangePage(page) { listState.stock.page = page; renderView(); }
 
 function articleItemsList() {
   return artByBU().map(a => ({ id: a.article_id, label: `${a.code} — ${a.description}` }));
@@ -817,6 +809,7 @@ async function renderArticles() {
   if (articlesSearch) params.set('search', articlesSearch);
   const { rows, total, limit } = await api(`/articles/list?${params.toString()}`);
 
+  window._bulkSelectedArticleIds = null; // cada render arranca en modo "selección de esta página"
   el.innerHTML = `
     <div class="card">
       <div class="section-toolbar">
@@ -836,7 +829,7 @@ async function renderArticles() {
         <tbody>
           ${rows.length ? rows.map(a => `
             <tr>
-              <td><input type="checkbox" class="article-check" value="${a.article_id}" onchange="updateBulkDeleteButton()"></td>
+              <td><input type="checkbox" class="article-check" value="${a.article_id}" onchange="onArticleCheckToggle()"></td>
               <td class="mono">${a.code}</td>
               <td class="mono">${a.alt_code || '-'}</td>
               <td>${a.description}</td>
@@ -854,12 +847,40 @@ async function renderArticles() {
             </tr>`).join('') : `<tr><td colspan="12"><div class="empty-state">No hay artículos que coincidan.</div></td></tr>`}
         </tbody>
       </table>
+      ${total > rows.length ? `<div class="hint" style="margin-top:8px">¿Necesitás seleccionar más que esta página? <a href="#" onclick="selectAllArticlesMatchingFilter(); return false;">Seleccionar los ${total} resultados de este filtro</a>.</div>` : ''}
       ${total ? paginationControlsHtml('articles', articlesPage, total, limit) : ''}
     </div>
   `;
   document.getElementById('articlesSearchInput')?.focus();
   const input = document.getElementById('articlesSearchInput');
   if (input) input.setSelectionRange(input.value.length, input.value.length);
+}
+async function selectAllArticlesMatchingFilter() {
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: 1, limit: 200 });
+  if (articlesSearch) params.set('search', articlesSearch);
+  let page = 1;
+  let ids = [];
+  let total = Infinity;
+  showWorking('Seleccionando artículos…');
+  try {
+    while (ids.length < total) {
+      params.set('page', page);
+      const { rows, total: t } = await api(`/articles/list?${params.toString()}`);
+      total = t;
+      ids = ids.concat(rows.map(r => r.article_id));
+      if (!rows.length) break;
+      page++;
+    }
+  } finally {
+    hideWorking();
+  }
+  window._bulkSelectedArticleIds = ids;
+  document.querySelectorAll('.article-check').forEach(c => c.checked = true);
+  updateBulkDeleteButton();
+}
+function onArticleCheckToggle() {
+  window._bulkSelectedArticleIds = null; // el usuario está ajustando la selección a mano
+  updateBulkDeleteButton();
 }
 let articlesSearchTimer = null;
 function articlesSearchDebounced() {
@@ -880,19 +901,19 @@ function articlesChangePage(page) {
   renderView();
 }
 function toggleAllArticleChecks(checkbox) {
+  window._bulkSelectedArticleIds = null; // "seleccionar todo" del encabezado vuelve a ser por página
   document.querySelectorAll('.article-check').forEach(c => c.checked = checkbox.checked);
   updateBulkDeleteButton();
 }
 function updateBulkDeleteButton() {
-  const checked = document.querySelectorAll('.article-check:checked').length;
   const btn = document.getElementById('bulkDeleteArticlesBtn');
-  if (btn) {
-    btn.style.display = checked > 0 ? 'inline-flex' : 'none';
-    btn.textContent = checked > 0 ? `Eliminar seleccionados (${checked})` : 'Eliminar seleccionados';
-  }
+  if (!btn) return;
+  const checked = window._bulkSelectedArticleIds ? window._bulkSelectedArticleIds.length : document.querySelectorAll('.article-check:checked').length;
+  btn.style.display = checked > 0 ? 'inline-flex' : 'none';
+  btn.textContent = checked > 0 ? `Eliminar seleccionados (${checked})` : 'Eliminar seleccionados';
 }
 async function bulkDeleteArticles() {
-  const ids = [...document.querySelectorAll('.article-check:checked')].map(c => Number(c.value));
+  const ids = window._bulkSelectedArticleIds || [...document.querySelectorAll('.article-check:checked')].map(c => Number(c.value));
   if (!ids.length) return;
   if (!confirm(`¿Eliminar ${ids.length} artículo(s)? Esta acción no se puede deshacer.`)) return;
   if (!(await verifyPasswordPrompt(`eliminar ${ids.length} artículos`))) return;
@@ -903,6 +924,7 @@ async function bulkDeleteArticles() {
     document.getElementById('workingIndicatorText').textContent = `Eliminando artículos… (${ok + failed}/${ids.length})`;
   }
   hideWorking();
+  window._bulkSelectedArticleIds = null;
   toast(failed ? `Eliminados: ${ok}. Con errores: ${failed}.` : `${ok} artículo(s) eliminado(s).`, failed ? 'error' : 'success');
   renderView();
 }
@@ -1275,32 +1297,61 @@ async function renderSuppliers() {
     <button class="btn btn-sm" onclick="triggerImport('suppliers')">Importar Excel</button>
     <button class="btn btn-primary" onclick="newContactModal('supplier')">+ Nuevo proveedor</button>`;
   const el = document.getElementById('view');
-  const rows = state.cache.suppliers;
-  const balances = await Promise.all(rows.map(s => api(`/suppliers/${s.id}/balance`)));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (s) => `
-    <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(s)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(s)]?.balance || 0)}</td>
-    <td>
-      <button class="btn btn-sm" onclick="openEditContactModal('supplier', ${s.id})">Editar</button>
-      <button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button>
-    </td></tr>`,
-    'No hay proveedores cargados.')}</div>`;
+
+  const st = listState.suppliers;
+  const params = new URLSearchParams({ page: st.page, limit: 50 });
+  if (st.search) params.set('search', st.search);
+  const { rows, total, limit } = await api(`/suppliers/list?${params.toString()}`);
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Proveedores</div>
+        ${listSearchToolbarHtml('suppliers', 'suppliersSearchInput', 'Buscar por nombre o CUIT…')}
+      </div>
+      ${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (s) => `
+        <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(s.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(s.balance || 0)}</td>
+        <td>
+          <button class="btn btn-sm" onclick="openEditContactModal('supplier', ${s.id})">Editar</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button>
+        </td></tr>`,
+        'No hay proveedores cargados.', (s) => s.id)}
+      ${total ? paginationControlsHtml('suppliers', st.page, total, limit) : ''}
+    </div>`;
+  focusPreservingSearchInput('suppliersSearchInput');
 }
+function suppliersChangePage(page) { listState.suppliers.page = page; renderView(); }
+
 async function renderCustomers() {
   document.getElementById('viewActions').innerHTML = `
     <button class="btn btn-sm" onclick="downloadImportTemplate('customers')">Plantilla Excel</button>
     <button class="btn btn-sm" onclick="triggerImport('customers')">Importar Excel</button>
     <button class="btn btn-primary" onclick="newContactModal('customer')">+ Nuevo cliente</button>`;
   const el = document.getElementById('view');
-  const rows = state.cache.customers;
-  const balances = await Promise.all(rows.map(c => api(`/customers/${c.id}/balance`)));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (c) => `
-    <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(balances[rows.indexOf(c)]?.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(balances[rows.indexOf(c)]?.balance || 0)}</td>
-    <td>
-      <button class="btn btn-sm" onclick="openEditContactModal('customer', ${c.id})">Editar</button>
-      <button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button>
-    </td></tr>`,
-    'No hay clientes cargados.')}</div>`;
+
+  const st = listState.customers;
+  const params = new URLSearchParams({ page: st.page, limit: 50 });
+  if (st.search) params.set('search', st.search);
+  const { rows, total, limit } = await api(`/customers/list?${params.toString()}`);
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Clientes</div>
+        ${listSearchToolbarHtml('customers', 'customersSearchInput', 'Buscar por nombre o CUIT…')}
+      </div>
+      ${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Deuda pendiente', ''], (c) => `
+        <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(c.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(c.balance || 0)}</td>
+        <td>
+          <button class="btn btn-sm" onclick="openEditContactModal('customer', ${c.id})">Editar</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button>
+        </td></tr>`,
+        'No hay clientes cargados.', (c) => c.id)}
+      ${total ? paginationControlsHtml('customers', st.page, total, limit) : ''}
+    </div>`;
+  focusPreservingSearchInput('customersSearchInput');
 }
+function customersChangePage(page) { listState.customers.page = page; renderView(); }
 function openEditContactModal(kind, id) {
   const label = kind === 'supplier' ? 'proveedor' : 'cliente';
   const list = kind === 'supplier' ? state.cache.suppliers : state.cache.customers;
@@ -1418,20 +1469,38 @@ async function createContact(kind) {
 async function renderProjects() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newProjectModal()">+ Nuevo proyecto</button>`;
   const el = document.getElementById('view');
-  const profitability = await api('/projects/profitability');
-  const rows = projByBU().map(p => ({ ...p, profit: profitability.find(x => x.project_id === p.id) }));
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['Nombre', 'Ingresos', 'Egresos', 'Resultado', ''], (p) => `
-    <tr>
-      <td>${p.name}</td>
-      <td class="num income">$ ${fmtMoney(p.profit?.total_income || 0)}</td>
-      <td class="num expense">$ ${fmtMoney(p.profit?.total_expense || 0)}</td>
-      <td class="num ${Number(p.profit?.net_result || 0) >= 0 ? 'income' : 'expense'}">$ ${fmtMoney(p.profit?.net_result || 0)}</td>
-      <td>
-        <button class="btn btn-sm" onclick="openEditProjectModal(${p.id}, '${p.name.replace(/'/g, "\\'")}')">Editar</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteEntity('projects', ${p.id}, '${p.name.replace(/'/g, "\\'")}')">Eliminar</button>
-      </td>
-    </tr>`, 'No hay proyectos en esta unidad.')}</div>`;
+
+  const st = listState.projects;
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: st.page, limit: 50 });
+  if (st.search) params.set('search', st.search);
+  const [{ rows: pageRows, total, limit }, profitability] = await Promise.all([
+    api(`/projects/list?${params.toString()}`),
+    api('/projects/profitability'),
+  ]);
+  const rows = pageRows.map(p => ({ ...p, profit: profitability.find(x => x.project_id === p.id) }));
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Proyectos</div>
+        ${listSearchToolbarHtml('projects', 'projectsSearchInput', 'Buscar por nombre…')}
+      </div>
+      ${tableOrEmpty(rows, ['Nombre', 'Ingresos', 'Egresos', 'Resultado', ''], (p) => `
+        <tr>
+          <td>${p.name}</td>
+          <td class="num income">$ ${fmtMoney(p.profit?.total_income || 0)}</td>
+          <td class="num expense">$ ${fmtMoney(p.profit?.total_expense || 0)}</td>
+          <td class="num ${Number(p.profit?.net_result || 0) >= 0 ? 'income' : 'expense'}">$ ${fmtMoney(p.profit?.net_result || 0)}</td>
+          <td>
+            <button class="btn btn-sm" onclick="openEditProjectModal(${p.id}, '${p.name.replace(/'/g, "\\'")}')">Editar</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteEntity('projects', ${p.id}, '${p.name.replace(/'/g, "\\'")}')">Eliminar</button>
+          </td>
+        </tr>`, 'No hay proyectos en esta unidad.', (p) => p.id)}
+      ${total ? paginationControlsHtml('projects', st.page, total, limit) : ''}
+    </div>`;
+  focusPreservingSearchInput('projectsSearchInput');
 }
+function projectsChangePage(page) { listState.projects.page = page; renderView(); }
 function openEditProjectModal(id, name) {
   openModal(`
     <h2>Editar proyecto</h2>
@@ -1483,6 +1552,49 @@ function paginationControlsHtml(idPrefix, page, total, limit) {
         <button class="btn btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="${idPrefix}ChangePage(${page + 1})">Siguiente →</button>
       </div>
     </div>`;
+}
+
+// ---------------------------------------------------------
+// Buscador + paginación reutilizable para listados (mismo patrón que ya usaba
+// Artículos, generalizado acá para no repetirlo entero en cada listado nuevo).
+// idPrefix tiene que tener definida una función global `${idPrefix}ChangePage(page)`
+// (igual que ya requiere paginationControlsHtml).
+// ---------------------------------------------------------
+const listState = {
+  stock: { page: 1, search: '' },
+  suppliers: { page: 1, search: '' },
+  customers: { page: 1, search: '' },
+  projects: { page: 1, search: '' },
+  quotes: { page: 1, search: '' },
+  shipments: { page: 1, search: '' },
+};
+let listSearchTimer = null;
+function listSearchDebounced(kind, inputId) {
+  clearTimeout(listSearchTimer);
+  listSearchTimer = setTimeout(() => {
+    listState[kind].search = document.getElementById(inputId).value;
+    listState[kind].page = 1;
+    renderView();
+  }, 350);
+}
+function listClearSearch(kind) {
+  listState[kind].search = '';
+  listState[kind].page = 1;
+  renderView();
+}
+function listSearchToolbarHtml(kind, inputId, placeholder, title) {
+  const search = listState[kind].search;
+  return `
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="text" id="${inputId}" value="${escAttr(search)}" placeholder="${placeholder}" ${title ? `title="${title}"` : ''} style="width:260px" oninput="listSearchDebounced('${kind}', '${inputId}')">
+      ${search ? `<button class="btn btn-sm" onclick="listClearSearch('${kind}')">Limpiar</button>` : ''}
+    </div>`;
+}
+function focusPreservingSearchInput(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 async function renderPurchases() {
@@ -1573,7 +1685,7 @@ async function renderPurchases() {
           <td>${statusBadge(p.status)}</td>
           <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
           <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
-          <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
+          <td>${opActions('purchases', p)} ${(p.status === 'CONFIRMED' && (Number(p.total_amount) - Number(p.settled_amount || 0)) > 0.01) ? `<button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${Number(p.total_amount) - Number(p.settled_amount || 0)})">Procesar pago</button>` : ''} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
         </tr>`, 'No hay compras registradas en esta unidad.', (p) => p.id)}
       ${total ? paginationControlsHtml('purchases', purchasesPage, total, limit) : ''}
     </div>`;
@@ -1619,10 +1731,10 @@ function openPayModal(purchaseId, remaining) {
   `);
   window._payBoxItems = boxItems;
   window._payProjItems = projItems;
-  addPaySplit();
+  addPaySplit(remaining);
 }
 let paySplitCount = 0;
-function addPaySplit() {
+function addPaySplit(defaultAmount) {
   const id = paySplitCount++;
   const container = document.getElementById('paySplits');
   const row = document.createElement('div');
@@ -1630,7 +1742,7 @@ function addPaySplit() {
   row.id = `psplit_${id}`;
   row.innerHTML = `
     ${searchableSelectHtml(`pbox_${id}`, window._payBoxItems, 'Buscar caja…')}
-    <input type="text" inputmode="decimal" placeholder="Monto" id="pamount_${id}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
+    <input type="text" inputmode="decimal" placeholder="Monto" id="pamount_${id}" value="${defaultAmount != null ? formatMoneyFieldValue(defaultAmount) : ''}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
     ${searchableSelectHtml(`pproj_${id}`, window._payProjItems, 'Buscar proyecto…', 'Sin proyecto')}
     <button class="remove-line" onclick="document.getElementById('psplit_${id}').remove()">×</button>
   `;
@@ -1656,7 +1768,7 @@ async function submitPay(purchaseId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 async function verifyPurchasePayment(id) {
-  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este pago'))) return;
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este pago', true))) return;
   try {
     await api(`/purchase-payments/${id}/verify`, { method: 'POST' });
     toast('Pago verificado. Ya impacta en el saldo.');
@@ -1665,7 +1777,7 @@ async function verifyPurchasePayment(id) {
 }
 async function rejectPurchasePayment(id) {
   if (!confirm('¿Rechazar este pago pendiente?')) return;
-  if (!(await verifyPasswordPrompt('rechazar este pago'))) return;
+  if (!(await verifyPasswordPrompt('rechazar este pago', true))) return;
   try {
     await api(`/purchase-payments/${id}/reject`, { method: 'POST' });
     toast('Pago rechazado.');
@@ -1679,23 +1791,36 @@ async function rejectPurchasePayment(id) {
 async function renderQuotes() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newQuoteModal()">+ Nuevo presupuesto</button>`;
   const el = document.getElementById('view');
-  const all = await api('/quotes');
-  const rows = all.filter(q => q.business_unit_id === state.selectedBU);
 
-  el.innerHTML = `<div class="card">${tableOrEmpty(rows, ['#', 'Cliente', 'Fecha', 'Estado', 'Total', ''], (q) => `
-    <tr>
-      <td class="mono">#${q.id}</td>
-      <td>${customerName(q.customer_id)}</td>
-      <td class="mono">${fmtDate(q.date)}</td>
-      <td>${quoteStatusBadge(q.status)}</td>
-      <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
-      <td>
-        <button class="btn btn-sm" onclick="showQuoteDetail(${q.id})">Detalle</button>
-        ${q.status === 'PENDING' ? `<button class="btn btn-sm btn-primary" onclick="convertQuoteToSale(${q.id})">Convertir en venta</button>` : ''}
-        <button class="btn btn-sm btn-danger" onclick="deleteQuote(${q.id})">Eliminar</button>
-      </td>
-    </tr>`, 'No hay presupuestos cargados en esta unidad.')}</div>`;
+  const st = listState.quotes;
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: st.page, limit: 25 });
+  if (st.search) params.set('search', st.search);
+  const { rows, total, limit } = await api(`/quotes/list?${params.toString()}`);
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Presupuestos</div>
+        ${listSearchToolbarHtml('quotes', 'quotesSearchInput', 'Buscar por cliente o número…')}
+      </div>
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'Fecha', 'Estado', 'Total', ''], (q) => `
+        <tr>
+          <td class="mono">#${q.id}</td>
+          <td>${customerName(q.customer_id)}</td>
+          <td class="mono">${fmtDate(q.date)}</td>
+          <td>${quoteStatusBadge(q.status)}</td>
+          <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
+          <td>
+            <button class="btn btn-sm" onclick="showQuoteDetail(${q.id})">Detalle</button>
+            ${q.status === 'PENDING' ? `<button class="btn btn-sm btn-primary" onclick="convertQuoteToSale(${q.id})">Convertir en venta</button>` : ''}
+            <button class="btn btn-sm btn-danger" onclick="deleteQuote(${q.id})">Eliminar</button>
+          </td>
+        </tr>`, 'No hay presupuestos cargados en esta unidad.', (q) => q.id)}
+      ${total ? paginationControlsHtml('quotes', st.page, total, limit) : ''}
+    </div>`;
+  focusPreservingSearchInput('quotesSearchInput');
 }
+function quotesChangePage(page) { listState.quotes.page = page; renderView(); }
 function quoteStatusBadge(status) {
   const map = { PENDING: 'pending', CONVERTED: 'confirmed', CANCELLED: 'cancelled' };
   const label = { PENDING: 'Pendiente', CONVERTED: 'Convertido', CANCELLED: 'Cancelado' };
@@ -1802,29 +1927,41 @@ async function convertQuoteToSale(id) {
 async function renderShipments() {
   document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newShipmentModal()">+ Nuevo remito de envío</button>`;
   const el = document.getElementById('view');
-  const all = await api('/shipments');
-  const rows = all.filter(s => s.business_unit_id === state.selectedBU);
+
+  const st = listState.shipments;
+  const params = new URLSearchParams({ business_unit_id: state.selectedBU, page: st.page, limit: 25 });
+  if (st.search) params.set('search', st.search);
+  const { rows, total, limit } = await api(`/shipments/list?${params.toString()}`);
 
   el.innerHTML = `
     <div class="hint" style="margin-bottom:14px">Para artículos que se prestan (ej: pruebas) o se regalan. Descuenta stock igual que una venta, pero no maneja precios ni cobro.</div>
-    <div class="card">${tableOrEmpty(rows, ['#', 'Cliente', 'Motivo', 'Depósito', 'Fecha', 'Estado', ''], (s) => `
-    <tr>
-      <td class="mono">#${s.id}</td>
-      <td>${customerName(s.customer_id)}</td>
-      <td>${s.reason === 'REGALO' ? 'Regalo' : 'Préstamo'}</td>
-      <td>${whByBU().find(w => w.id === s.warehouse_id)?.name || '-'}</td>
-      <td class="mono">${fmtDate(s.date)}</td>
-      <td>${statusBadge(s.status)}</td>
-      <td>
-        <button class="btn btn-sm" onclick="showShipmentDetail(${s.id})">Detalle</button>
-        ${s.status === 'PENDING' ? `<button class="btn btn-sm" onclick="confirmShipment(${s.id})">Confirmar</button>` : ''}
-        ${s.status === 'CONFIRMED' ? `<button class="btn btn-sm btn-danger" onclick="cancelShipment(${s.id})">Cancelar</button>` : ''}
-        <button class="btn btn-sm btn-danger" onclick="deleteShipment(${s.id})">Eliminar</button>
-        <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
-        <button class="btn btn-sm" onclick="openShipmentDocumentModal(${s.id})">Remito</button>
-      </td>
-    </tr>`, 'No hay remitos de envío cargados en esta unidad.')}</div>`;
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Remitos de envío</div>
+        ${listSearchToolbarHtml('shipments', 'shipmentsSearchInput', 'Buscar por cliente o número…')}
+      </div>
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'Motivo', 'Depósito', 'Fecha', 'Estado', ''], (s) => `
+      <tr>
+        <td class="mono">#${s.id}</td>
+        <td>${customerName(s.customer_id)}</td>
+        <td>${s.reason === 'REGALO' ? 'Regalo' : 'Préstamo'}</td>
+        <td>${whByBU().find(w => w.id === s.warehouse_id)?.name || '-'}</td>
+        <td class="mono">${fmtDate(s.date)}</td>
+        <td>${statusBadge(s.status)}</td>
+        <td>
+          <button class="btn btn-sm" onclick="showShipmentDetail(${s.id})">Detalle</button>
+          ${s.status === 'PENDING' ? `<button class="btn btn-sm" onclick="confirmShipment(${s.id})">Confirmar</button>` : ''}
+          ${s.status === 'CONFIRMED' ? `<button class="btn btn-sm btn-danger" onclick="cancelShipment(${s.id})">Cancelar</button>` : ''}
+          <button class="btn btn-sm btn-danger" onclick="deleteShipment(${s.id})">Eliminar</button>
+          <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
+          <button class="btn btn-sm" onclick="openShipmentDocumentModal(${s.id})">Remito</button>
+        </td>
+      </tr>`, 'No hay remitos de envío cargados en esta unidad.', (s) => s.id)}
+      ${total ? paginationControlsHtml('shipments', st.page, total, limit) : ''}
+    </div>`;
+  focusPreservingSearchInput('shipmentsSearchInput');
 }
+function shipmentsChangePage(page) { listState.shipments.page = page; renderView(); }
 function newShipmentModal() {
   const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
   const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
@@ -2336,7 +2473,7 @@ async function openCollectModal(saleId, remaining) {
   `);
   window._collectBoxItems = boxItems;
   window._collectProjItems = projItems;
-  addCollectSplit(defaultBoxId, defaultBoxId ? remaining : null);
+  addCollectSplit(defaultBoxId, remaining);
 }
 let collectSplitCount = 0;
 function addCollectSplit(defaultBoxId, defaultAmount) {
@@ -2593,6 +2730,8 @@ async function showSaleDetail(saleId) {
     api(`/sales/${saleId}/full`).catch(() => null),
   ]);
   const bc = full?.bank_conversion;
+  const remaining = full ? Number(full.sale.total_amount) - Number(full.sale.settled_amount || 0) : 0;
+  const canCollect = full && full.sale.status === 'CONFIRMED' && remaining > 0.01;
   openModal(`
     <h2>Detalle — Venta #${saleId}</h2>
     ${bc ? `<div class="hint" style="margin-bottom:14px">💵 Cobrada por conversión bancaria: <strong>$ ${fmtMoney(bc.amount_ars)}</strong> vía ${bc.bank_name} → <strong>US$ ${fmtMoney(bc.usd_equivalent)}</strong>${bc.notes ? ` · ${bc.notes}` : ''}</div>` : ''}
@@ -2609,6 +2748,7 @@ async function showSaleDetail(saleId) {
       <span style="display:inline-block;width:1px;height:20px;background:var(--border);margin:0 4px"></span>
       <button class="btn" onclick="openComprobanteModal(${saleId})">Comprobante</button>
       <button class="btn" onclick="openRemitoModal(${saleId})">Remito</button>
+      ${canCollect ? `<button class="btn btn-primary" onclick="openCollectModal(${saleId}, ${remaining})">Procesar cobro</button>` : ''}
     </div>
   `);
 }
@@ -3313,7 +3453,7 @@ function cashBoxIcon(name, kind) {
 
 
 async function verifySaleCollection(id) {
-  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este cobro'))) return;
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico de este cobro', true))) return;
   try {
     await api(`/sale-collections/${id}/verify`, { method: 'POST' });
     toast('Cobro verificado. Ya impacta en el saldo de la caja/sobre.');
@@ -3322,7 +3462,7 @@ async function verifySaleCollection(id) {
 }
 async function rejectSaleCollection(id) {
   if (!confirm('¿Rechazar este cobro? La venta vuelve a quedar pendiente por ese monto.')) return;
-  if (!(await verifyPasswordPrompt('rechazar este cobro'))) return;
+  if (!(await verifyPasswordPrompt('rechazar este cobro', true))) return;
   try {
     await api(`/sale-collections/${id}/reject`, { method: 'POST' });
     toast('Cobro rechazado. El saldo pendiente de la venta se actualizó.');
@@ -3593,7 +3733,7 @@ async function createCashMovement() {
   } catch (e) { toast(e.message, 'error'); }
 }
 async function verifyPendingMovement(id) {
-  if (!(await verifyPasswordPrompt('confirmar el movimiento físico'))) return;
+  if (!(await verifyPasswordPrompt('confirmar el movimiento físico', true))) return;
   try {
     await api(`/cash-movements/pending/${id}/verify`, { method: 'POST' });
     toast('Movimiento verificado. Ya impacta en el saldo.');
@@ -3602,7 +3742,7 @@ async function verifyPendingMovement(id) {
 }
 async function rejectPendingMovement(id) {
   if (!confirm('¿Rechazar este movimiento pendiente?')) return;
-  if (!(await verifyPasswordPrompt('rechazar este movimiento'))) return;
+  if (!(await verifyPasswordPrompt('rechazar este movimiento', true))) return;
   try {
     await api(`/cash-movements/pending/${id}/reject`, { method: 'POST' });
     toast('Movimiento rechazado.');
@@ -3906,11 +4046,18 @@ async function loadCashBoxMovements() {
     </tr>`, 'Esta caja no tiene movimientos registrados.')}
   `;
 }
-async function verifyPasswordPrompt(actionLabel) {
+// Ventana de gracia: solo para las verificaciones de cobro/pago (la tarea repetitiva
+// del día). Acciones irreversibles (purgar papelera, editar stock a mano, eliminar en
+// lote, etc.) NO reciben gracia y siguen pidiendo la contraseña siempre.
+const PASSWORD_GRACE_MS = 5 * 60 * 1000; // 5 minutos
+let _lastPasswordVerifiedAt = 0;
+async function verifyPasswordPrompt(actionLabel, allowGrace) {
+  if (allowGrace && (Date.now() - _lastPasswordVerifiedAt) < PASSWORD_GRACE_MS) return true;
   const password = prompt(`Ingresá tu contraseña para confirmar: ${actionLabel}`);
   if (password === null) return false;
   try {
     await api('/auth/verify-password', { method: 'POST', body: JSON.stringify({ password }) });
+    _lastPasswordVerifiedAt = Date.now();
     return true;
   } catch (e) {
     toast(e.message, 'error');

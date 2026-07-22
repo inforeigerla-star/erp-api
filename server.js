@@ -321,6 +321,26 @@ app.get('/projects', async (req, res) => {
   const r = await pool.query('SELECT * FROM project WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
 });
+app.get('/projects/list', async (req, res) => {
+  const { business_unit_id, search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = ['deleted_at IS NULL'];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (search) { conditions.push(`name ILIKE $${i++}`); values.push(`%${search}%`); }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM project ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT * FROM project ${where} ORDER BY name LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
+});
 app.put('/projects/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -353,6 +373,27 @@ app.post('/suppliers', async (req, res) => {
 app.get('/suppliers', async (req, res) => {
   const r = await pool.query('SELECT * FROM supplier WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
+});
+app.get('/suppliers/list', async (req, res) => {
+  const { search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = ['s.deleted_at IS NULL'];
+  const values = [];
+  let i = 1;
+  if (search) { conditions.push(`(s.name ILIKE $${i} OR s.tax_id ILIKE $${i})`); values.push(`%${search}%`); i++; }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM supplier s ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT s.*, COALESCE(sb.balance, 0) AS balance
+     FROM supplier s LEFT JOIN supplier_balance sb ON sb.supplier_id = s.id
+     ${where} ORDER BY s.name LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 app.put('/suppliers/:id', async (req, res) => {
   try {
@@ -416,6 +457,27 @@ app.post('/customers', async (req, res) => {
 app.get('/customers', async (req, res) => {
   const r = await pool.query('SELECT * FROM customer WHERE deleted_at IS NULL ORDER BY id');
   res.json(r.rows);
+});
+app.get('/customers/list', async (req, res) => {
+  const { search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = ['c.deleted_at IS NULL'];
+  const values = [];
+  let i = 1;
+  if (search) { conditions.push(`(c.name ILIKE $${i} OR c.tax_id ILIKE $${i})`); values.push(`%${search}%`); i++; }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const countR = await pool.query(`SELECT COUNT(*) FROM customer c ${where}`, values);
+  const rowsR = await pool.query(
+    `SELECT c.*, COALESCE(cb.balance, 0) AS balance
+     FROM customer c LEFT JOIN customer_balance cb ON cb.customer_id = c.id
+     ${where} ORDER BY c.name LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 app.put('/customers/:id', async (req, res) => {
   try {
@@ -1376,6 +1438,34 @@ app.get('/shipments', async (req, res) => {
   const r = await pool.query('SELECT * FROM shipment WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);
 });
+app.get('/shipments/list', async (req, res) => {
+  const { business_unit_id, search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = ['sh.deleted_at IS NULL'];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`sh.business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (search) {
+    conditions.push(`(c.name ILIKE $${i} OR CAST(sh.id AS TEXT) ILIKE $${i})`);
+    values.push(`%${search}%`);
+    i++;
+  }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const countR = await pool.query(
+    `SELECT COUNT(*) FROM shipment sh JOIN customer c ON c.id = sh.customer_id ${where}`,
+    values
+  );
+  const rowsR = await pool.query(
+    `SELECT sh.* FROM shipment sh JOIN customer c ON c.id = sh.customer_id
+     ${where} ORDER BY sh.id DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
+});
 
 app.get('/shipments/:id/items', async (req, res) => {
   const r = await pool.query(`
@@ -1489,6 +1579,34 @@ app.delete('/shipments/:id', async (req, res) => {
 app.get('/quotes', async (req, res) => {
   const r = await pool.query('SELECT * FROM quote WHERE deleted_at IS NULL ORDER BY id DESC');
   res.json(r.rows);
+});
+app.get('/quotes/list', async (req, res) => {
+  const { business_unit_id, search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = ['q.deleted_at IS NULL'];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`q.business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (search) {
+    conditions.push(`(c.name ILIKE $${i} OR CAST(q.id AS TEXT) ILIKE $${i})`);
+    values.push(`%${search}%`);
+    i++;
+  }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const countR = await pool.query(
+    `SELECT COUNT(*) FROM quote q JOIN customer c ON c.id = q.customer_id ${where}`,
+    values
+  );
+  const rowsR = await pool.query(
+    `SELECT q.* FROM quote q JOIN customer c ON c.id = q.customer_id
+     ${where} ORDER BY q.id DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
 });
 
 app.get('/quotes/:id/items', async (req, res) => {
@@ -1947,6 +2065,39 @@ app.get('/stock', async (req, res) => {
   `);
   res.json(r.rows);
 });
+app.get('/stock/list', async (req, res) => {
+  const { business_unit_id, search, page, limit } = req.query;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(limit) || 50));
+  const offset = (pageNum - 1) * pageSize;
+
+  const conditions = [];
+  const values = [];
+  let i = 1;
+  if (business_unit_id) { conditions.push(`w.business_unit_id = $${i++}`); values.push(business_unit_id); }
+  if (search) {
+    conditions.push(`(a.code ILIKE $${i} OR a.alt_code ILIKE $${i} OR a.description ILIKE $${i} OR w.name ILIKE $${i})`);
+    values.push(`%${search}%`);
+    i++;
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countR = await pool.query(
+    `SELECT COUNT(*) FROM stock s JOIN article a ON a.id = s.article_id JOIN warehouse w ON w.id = s.warehouse_id ${where}`,
+    values
+  );
+  const rowsR = await pool.query(
+    `SELECT s.*, a.code, a.alt_code, a.description, w.name AS warehouse_name
+     FROM stock s
+     JOIN article a ON a.id = s.article_id
+     JOIN warehouse w ON w.id = s.warehouse_id
+     ${where}
+     ORDER BY w.name, a.code
+     LIMIT $${i} OFFSET $${i + 1}`,
+    [...values, pageSize, offset]
+  );
+  res.json({ rows: rowsR.rows, total: Number(countR.rows[0].count), page: pageNum, limit: pageSize });
+});
 
 app.get('/stock/kardex/:article_id', async (req, res) => {
   const { article_id } = req.params;
@@ -2114,6 +2265,69 @@ app.delete('/stock-movements/:id', async (req, res) => {
 app.get('/projects/profitability', async (req, res) => {
   const r = await pool.query('SELECT * FROM project_profitability ORDER BY project_id');
   res.json(r.rows);
+});
+
+// ---------- DASHBOARD ----------
+// Resume el Panel en el servidor: antes el frontend bajaba compras, ventas y
+// stock completos (de todas las unidades de negocio) y filtraba/sumaba en el
+// navegador. Acá se calcula todo ya filtrado por unidad de negocio, para no
+// transferir ni procesar de más a medida que crece el historial.
+app.get('/dashboard/summary', async (req, res) => {
+  try {
+    const { business_unit_id } = req.query;
+    if (!business_unit_id) throw new Error('Falta business_unit_id.');
+
+    const [salesR, purchasesR, stockR, projectsR, profitR, recentR] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(total_amount),0) AS total FROM sale
+         WHERE business_unit_id=$1 AND status='CONFIRMED' AND deleted_at IS NULL`,
+        [business_unit_id]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(total_amount),0) AS total FROM purchase
+         WHERE business_unit_id=$1 AND status='CONFIRMED' AND deleted_at IS NULL`,
+        [business_unit_id]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(s.quantity),0) AS total
+         FROM stock s JOIN warehouse w ON w.id = s.warehouse_id
+         WHERE w.business_unit_id=$1`,
+        [business_unit_id]
+      ),
+      pool.query(
+        `SELECT COUNT(*) AS total FROM project WHERE business_unit_id=$1 AND deleted_at IS NULL`,
+        [business_unit_id]
+      ),
+      pool.query(
+        `SELECT pp.* FROM project_profitability pp
+         JOIN project p ON p.id = pp.project_id
+         WHERE p.business_unit_id=$1 AND p.deleted_at IS NULL
+         ORDER BY pp.project_id`,
+        [business_unit_id]
+      ),
+      pool.query(
+        `SELECT * FROM (
+           SELECT id, date, status, total_amount, 'Compra' AS kind FROM purchase
+             WHERE business_unit_id=$1 AND deleted_at IS NULL
+           UNION ALL
+           SELECT id, date, status, total_amount, 'Venta' AS kind FROM sale
+             WHERE business_unit_id=$1 AND deleted_at IS NULL
+         ) x ORDER BY date DESC LIMIT 8`,
+        [business_unit_id]
+      ),
+    ]);
+
+    res.json({
+      totalSales: Number(salesR.rows[0].total),
+      totalPurchases: Number(purchasesR.rows[0].total),
+      stockUnits: Number(stockR.rows[0].total),
+      activeProjectsCount: Number(projectsR.rows[0].total),
+      profitability: profitR.rows,
+      recentOperations: recentR.rows,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // ---------- BALANCES ----------
