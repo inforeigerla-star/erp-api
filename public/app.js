@@ -264,9 +264,9 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 // Navegación
 // ---------------------------------------------------------
 const viewTitles = {
-  dashboard: 'Panel', manualmovement: 'Registrar movimiento', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
+  dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Caja', users: 'Usuarios', debtors: 'Deudores', reports: 'Reportes',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', debtors: 'Deudores', reports: 'Reportes',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -287,7 +287,6 @@ async function renderView() {
     switch (state.view) {
       case 'dashboard': await renderDashboard(); break;
       case 'reports': await renderReports(); break;
-      case 'manualmovement': await renderManualMovement(); break;
       case 'stock': await renderStock(); break;
       case 'purchases': await renderPurchases(); break;
       case 'sales': await renderSales(); break;
@@ -298,7 +297,7 @@ async function renderView() {
       case 'suppliers': await renderSuppliers(); break;
       case 'customers': await renderCustomers(); break;
       case 'projects': await renderProjects(); break;
-      case 'cash': await renderCash(); break;
+      case 'cash': await renderFinance(); break;
       case 'users': await renderUsers(); break;
       case 'debtors': await renderDebtors(); break;
     }
@@ -3153,146 +3152,179 @@ async function rejectSaleCollection(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function renderCash() {
-  document.getElementById('viewActions').innerHTML = `
-    <button class="btn btn-sm" onclick="newCashBoxModal('CAJA')">+ Nueva caja</button>
-    <button class="btn btn-sm" onclick="newCashBoxModal('SOBRE')">+ Nuevo sobre</button>`;
-  const el = document.getElementById('view');
-  const dashboard = await api('/cash-boxes/dashboard');
-  const cajas = dashboard.filter(b => b.kind === 'CAJA');
-  const sobres = dashboard.filter(b => b.kind === 'SOBRE');
-
-const tile = (b) => `
-    <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}">
-      <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
-      <div class="cashbox-tile-name" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.name}</div>
-      <div class="cashbox-tile-balance" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
-      <div class="cashbox-tile-meta">
-        <span class="income">+${fmtMoney(b.total_income)}</span>
-        <span class="expense">−${fmtMoney(b.total_expense)}</span>
-      </div>
-      <div class="cashbox-tile-currency">${b.currency}</div>
-      <button class="btn btn-sm" style="margin-top:10px;width:100%" onclick="openManualBalanceModal(${b.cash_session_id}, '${b.name.replace(/'/g, "\\'")}', ${b.current_balance})">Ajustar saldo base</button>
-      <button class="btn btn-sm btn-danger" style="margin-top:6px;width:100%" onclick="deleteCashBox(${b.cash_box_id}, '${b.name.replace(/'/g, "\\'")}')">Eliminar</button>
-    </div>`;
-
-  el.innerHTML = `
-    <div class="card">
-      <div class="card-title">Cajas</div>
-      <div class="cashbox-grid">${cajas.map(tile).join('')}</div>
-    </div>
-    <div class="card">
-      <div class="card-title">Sobres</div>
-      <div class="cashbox-grid">${sobres.map(tile).join('')}</div>
-    </div>
-
-    <div class="card">
-      <div class="section-toolbar">
-        <div class="card-title" style="margin:0">Movimientos por caja o sobre</div>
-        <button class="btn btn-sm" onclick="downloadFile('/cash-movements/export-manual', 'movimientos_manuales.xlsx')">Exportar movimientos manuales (Excel)</button>
-      </div>
-      <div class="field" style="max-width:280px">
-        <label>Filtrar</label>
-        <select id="cashFilterSelect" onchange="loadCashBoxMovements()">
-          <option value="">— Seleccioná —</option>
-          <optgroup label="Cajas">${state.cache.cashBoxes.filter(b => b.kind === 'CAJA').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
-          <optgroup label="Sobres">${state.cache.cashBoxes.filter(b => b.kind === 'SOBRE').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
-        </select>
-      </div>
-      <div id="cashMovementsResult"></div>
-    </div>
-  `;
-}
-
+// ---------------------------------------------------------
+// FINANZAS (Cajas/Sobres + Movimientos + Registrar + Verificar, unificado)
+// ---------------------------------------------------------
+let financeSubTab = 'resumen'; // 'resumen' | 'movimientos' | 'registrar' | 'verificar'
+let financeMovementsPreselect = null;
 let manualMovementMode = 'simple'; // 'simple' | 'transfer'
 let manualFromBox = null;
 let manualToBox = null;
 
-async function renderManualMovement() {
-  document.getElementById('viewActions').innerHTML = '';
-  const el = document.getElementById('view');
-  const boxes = state.cache.cashBoxes || [];
+function switchFinanceTab(tab) {
+  financeSubTab = tab;
+  renderView();
+}
 
-  if (!boxes.length) {
-    el.innerHTML = `<div class="empty-state">No hay cajas ni sobres cargados todavía.</div>`;
+async function renderFinance() {
+  const pending = await api('/cash-movements/pending');
+
+  document.getElementById('viewActions').innerHTML = financeSubTab === 'resumen' ? `
+    <button class="btn btn-sm" onclick="newCashBoxModal('CAJA')">+ Nueva caja</button>
+    <button class="btn btn-sm" onclick="newCashBoxModal('SOBRE')">+ Nuevo sobre</button>` : '';
+
+  const el = document.getElementById('view');
+
+  const tabsHtml = `
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      <button class="btn btn-sm ${financeSubTab === 'resumen' ? 'btn-primary' : ''}" onclick="switchFinanceTab('resumen')">Resumen</button>
+      <button class="btn btn-sm ${financeSubTab === 'movimientos' ? 'btn-primary' : ''}" onclick="switchFinanceTab('movimientos')">Movimientos</button>
+      <button class="btn btn-sm ${financeSubTab === 'registrar' ? 'btn-primary' : ''}" onclick="switchFinanceTab('registrar')">Registrar</button>
+      <button class="btn btn-sm ${financeSubTab === 'verificar' ? 'btn-primary' : ''}" onclick="switchFinanceTab('verificar')">Verificar ${pending.length ? `(${pending.length})` : ''}</button>
+    </div>`;
+
+  if (financeSubTab === 'resumen') {
+    const dashboard = await api('/cash-boxes/dashboard');
+    const cajas = dashboard.filter(b => b.kind === 'CAJA');
+    const sobres = dashboard.filter(b => b.kind === 'SOBRE');
+
+    const tile = (b) => `
+      <div class="cashbox-tile ${b.currency === 'USD' ? 'usd' : 'ars'}">
+        <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
+        <div class="cashbox-tile-name" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.name}</div>
+        <div class="cashbox-tile-balance" onclick="selectCashBoxFilter(${b.cash_box_id})">${b.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(b.current_balance)}</div>
+        <div class="cashbox-tile-meta">
+          <span class="income">+${fmtMoney(b.total_income)}</span>
+          <span class="expense">−${fmtMoney(b.total_expense)}</span>
+        </div>
+        <div class="cashbox-tile-currency">${b.currency}</div>
+        <button class="btn btn-sm" style="margin-top:10px;width:100%" onclick="openManualBalanceModal(${b.cash_session_id}, '${b.name.replace(/'/g, "\\'")}', ${b.current_balance})">Ajustar saldo base</button>
+        <button class="btn btn-sm btn-danger" style="margin-top:6px;width:100%" onclick="deleteCashBox(${b.cash_box_id}, '${b.name.replace(/'/g, "\\'")}')">Eliminar</button>
+      </div>`;
+
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Cajas</div>
+        <div class="cashbox-grid">${cajas.map(tile).join('')}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Sobres</div>
+        <div class="cashbox-grid">${sobres.map(tile).join('')}</div>
+      </div>`;
     return;
   }
 
-  manualFromBox = null;
-  manualToBox = null;
+  if (financeSubTab === 'movimientos') {
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="section-toolbar">
+          <div class="card-title" style="margin:0">Movimientos por caja o sobre</div>
+          <button class="btn btn-sm" onclick="downloadFile('/cash-movements/export-manual', 'movimientos_manuales.xlsx')">Exportar movimientos manuales (Excel)</button>
+        </div>
+        <div class="field" style="max-width:280px">
+          <label>Filtrar</label>
+          <select id="cashFilterSelect" onchange="loadCashBoxMovements()">
+            <option value="">— Seleccioná —</option>
+            <optgroup label="Cajas">${state.cache.cashBoxes.filter(b => b.kind === 'CAJA').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
+            <optgroup label="Sobres">${state.cache.cashBoxes.filter(b => b.kind === 'SOBRE').map(b => `<option value="${b.id}">${b.name} (${b.currency})</option>`).join('')}</optgroup>
+          </select>
+        </div>
+        <div id="cashMovementsResult"></div>
+      </div>`;
+    if (financeMovementsPreselect != null) {
+      const sel = document.getElementById('cashFilterSelect');
+      sel.value = financeMovementsPreselect;
+      financeMovementsPreselect = null;
+      loadCashBoxMovements();
+    }
+    return;
+  }
 
-  const pending = await api('/cash-movements/pending');
+  if (financeSubTab === 'registrar') {
+    const boxes = state.cache.cashBoxes || [];
+    if (!boxes.length) {
+      el.innerHTML = tabsHtml + `<div class="empty-state">No hay cajas ni sobres cargados todavía.</div>`;
+      return;
+    }
 
-  const boxTiles = (idPrefix, selectFn) => boxes.map(b => `
-    <div class="cashbox-picker-tile" data-box-id="${b.id}" id="${idPrefix}_${b.id}" onclick="${selectFn}(${b.id})">
-      <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
-      <div class="cashbox-picker-name">${b.name}</div>
-      <div class="cashbox-picker-meta">${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency}</div>
-    </div>`).join('');
+    manualFromBox = null;
+    manualToBox = null;
 
-  el.innerHTML = `
-    <div class="card">
-      <div class="section-toolbar">
-        <div class="card-title" style="margin:0">1. Tipo de movimiento</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-sm ${manualMovementMode === 'simple' ? 'btn-primary' : ''}" onclick="setManualMovementMode('simple')">Ingreso / Egreso</button>
-          <button class="btn btn-sm ${manualMovementMode === 'transfer' ? 'btn-primary' : ''}" onclick="setManualMovementMode('transfer')">Transferencia entre caja/sobre</button>
+    const boxTiles = (idPrefix, selectFn) => boxes.map(b => `
+      <div class="cashbox-picker-tile" data-box-id="${b.id}" id="${idPrefix}_${b.id}" onclick="${selectFn}(${b.id})">
+        <div class="cashbox-tile-icon">${cashBoxIcon(b.name, b.kind)}</div>
+        <div class="cashbox-picker-name">${b.name}</div>
+        <div class="cashbox-picker-meta">${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency}</div>
+      </div>`).join('');
+
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="section-toolbar">
+          <div class="card-title" style="margin:0">1. Tipo de movimiento</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-sm ${manualMovementMode === 'simple' ? 'btn-primary' : ''}" onclick="setManualMovementMode('simple')">Ingreso / Egreso</button>
+            <button class="btn btn-sm ${manualMovementMode === 'transfer' ? 'btn-primary' : ''}" onclick="setManualMovementMode('transfer')">Transferencia entre caja/sobre</button>
+          </div>
+        </div>
+
+        <div id="manualModeSimple" style="display:${manualMovementMode === 'simple' ? 'block' : 'none'}">
+          <div class="hint" style="margin-bottom:10px">Elegí la caja o sobre donde entra o sale el dinero.</div>
+          <div class="cashbox-picker-grid" id="manualBoxPicker">${boxTiles('simplebox', 'selectManualBox')}</div>
+        </div>
+
+        <div id="manualModeTransfer" style="display:${manualMovementMode === 'transfer' ? 'block' : 'none'}">
+          <div class="hint" style="margin-bottom:6px"><strong>Sale de:</strong></div>
+          <div class="cashbox-picker-grid" id="manualFromPicker" style="margin-bottom:16px">${boxTiles('frombox', 'selectManualFromBox')}</div>
+          <div class="hint" style="margin-bottom:6px"><strong>Entra a:</strong></div>
+          <div class="cashbox-picker-grid" id="manualToPicker">${boxTiles('tobox', 'selectManualToBox')}</div>
         </div>
       </div>
 
-      <div id="manualModeSimple" style="display:${manualMovementMode === 'simple' ? 'block' : 'none'}">
-        <div class="hint" style="margin-bottom:10px">Elegí la caja o sobre donde entra o sale el dinero.</div>
-        <div class="cashbox-picker-grid" id="manualBoxPicker">${boxTiles('simplebox', 'selectManualBox')}</div>
+      <div class="card" id="manualMovementForm" style="display:none">
+        <div class="card-title">2. Datos del movimiento — <span id="selectedBoxLabel"></span></div>
+        <input type="hidden" id="f_mov_box">
+        <div class="field-row">
+          <div class="field" id="manualTypeField"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
+          <div class="field"><label>Monto</label><input id="f_mov_amount" type="text" inputmode="decimal" placeholder="0,00" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)"></div>
+        </div>
+        <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
+        <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
+        <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
+        <div class="hint" style="margin-top:8px">Queda pendiente de verificación hasta confirmar que el dinero se movió físicamente (ver pestaña "Verificar").</div>
       </div>
 
-      <div id="manualModeTransfer" style="display:${manualMovementMode === 'transfer' ? 'block' : 'none'}">
-        <div class="hint" style="margin-bottom:6px"><strong>Sale de:</strong></div>
-        <div class="cashbox-picker-grid" id="manualFromPicker" style="margin-bottom:16px">${boxTiles('frombox', 'selectManualFromBox')}</div>
-        <div class="hint" style="margin-bottom:6px"><strong>Entra a:</strong></div>
-        <div class="cashbox-picker-grid" id="manualToPicker">${boxTiles('tobox', 'selectManualToBox')}</div>
+      <div class="card" id="manualBoxHistoryCard" style="display:none">
+        <div class="card-title">Historial de movimientos — <span id="manualBoxHistoryLabel"></span></div>
+        <div id="manualBoxHistoryContent"><div class="empty-state">Cargando…</div></div>
       </div>
-    </div>
+    `;
+    return;
+  }
 
-    <div class="card" id="manualMovementForm" style="display:none">
-      <div class="card-title">2. Datos del movimiento — <span id="selectedBoxLabel"></span></div>
-      <input type="hidden" id="f_mov_box">
-      <div class="field-row">
-        <div class="field" id="manualTypeField"><label>Tipo</label><select id="f_mov_type"><option value="INCOME">Ingreso</option><option value="EXPENSE">Egreso</option></select></div>
-        <div class="field"><label>Monto</label><input id="f_mov_amount" type="text" inputmode="decimal" placeholder="0,00" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)"></div>
-      </div>
-      <div class="field"><label>Proyecto (opcional)</label><select id="f_mov_project"><option value="">Sin proyecto</option>${projByBU().map(p => `<option value="${p.id}">${p.name}</option>`).join('')}</select></div>
-      <div class="field"><label>Descripción</label><input id="f_mov_desc" placeholder="Ej: Pago de servicios"></div>
-      <button class="btn btn-primary" onclick="createCashMovement()">Registrar movimiento</button>
-      <div class="hint" style="margin-top:8px">Queda pendiente de verificación hasta confirmar que el dinero se movió físicamente (ver abajo).</div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Movimientos manuales pendientes de verificación ${pending.length ? `(${pending.length})` : ''}</div>
-      ${tableOrEmpty(pending, ['Fecha', 'Tipo', 'Origen', 'Destino', 'Monto', 'Descripción', ''], (p) => `
-        <tr>
-          <td class="mono">${fmtDate(p.created_at)}</td>
-          <td>${p.kind === 'TRANSFER' ? 'Transferencia' : p.kind === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
-          <td>${p.from_box_name || '-'}</td>
-          <td>${p.to_box_name || '-'}</td>
-          <td class="num income">$ ${fmtMoney(p.amount)}</td>
-          <td>${p.description || '-'}</td>
-          <td>
-            <button class="btn btn-sm btn-primary" onclick="verifyPendingMovement(${p.id})">Confirmar movimiento físico</button>
-            <button class="btn btn-sm btn-danger" onclick="rejectPendingMovement(${p.id})">Rechazar</button>
-          </td>
-        </tr>`, 'No hay movimientos manuales esperando verificación.')}
-    </div>
-
-    <div class="card" id="manualBoxHistoryCard" style="display:none">
-      <div class="card-title">Historial de movimientos — <span id="manualBoxHistoryLabel"></span></div>
-      <div id="manualBoxHistoryContent"><div class="empty-state">Cargando…</div></div>
-    </div>
-  `;
+  if (financeSubTab === 'verificar') {
+    el.innerHTML = tabsHtml + `
+      <div class="card">
+        <div class="card-title">Movimientos manuales pendientes de verificación ${pending.length ? `(${pending.length})` : ''}</div>
+        ${tableOrEmpty(pending, ['Fecha', 'Tipo', 'Origen', 'Destino', 'Monto', 'Descripción', ''], (p) => `
+          <tr>
+            <td class="mono">${fmtDate(p.created_at)}</td>
+            <td>${p.kind === 'TRANSFER' ? 'Transferencia' : p.kind === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
+            <td>${p.from_box_name || '-'}</td>
+            <td>${p.to_box_name || '-'}</td>
+            <td class="num income">$ ${fmtMoney(p.amount)}</td>
+            <td>${p.description || '-'}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="verifyPendingMovement(${p.id})">Confirmar movimiento físico</button>
+              <button class="btn btn-sm btn-danger" onclick="rejectPendingMovement(${p.id})">Rechazar</button>
+            </td>
+          </tr>`, 'No hay movimientos manuales esperando verificación.')}
+      </div>`;
+    return;
+  }
 }
 function setManualMovementMode(mode) {
   manualMovementMode = mode;
-  document.getElementById('manualMovementForm').style.display = 'none';
-  renderManualMovement();
+  renderView();
 }
 function selectManualBox(boxId) {
   const box = state.cache.cashBoxes.find(b => b.id === boxId);
@@ -3628,9 +3660,8 @@ function showImportErrorsModal(errors) {
 }
 
 function selectCashBoxFilter(id) {
-  document.getElementById('cashFilterSelect').value = id;
-  loadCashBoxMovements();
-  document.getElementById('cashFilterSelect').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  financeMovementsPreselect = id;
+  switchFinanceTab('movimientos');
 }
 
 function newCashBoxModal(kind) {
@@ -3725,7 +3756,7 @@ async function deleteCashMovement(id) {
 const PERMISSION_OPTIONS = [
   { key: 'dashboard', label: 'Panel' },
   { key: 'stock', label: 'Stock' },
-  { key: 'cash', label: 'Caja' },
+  { key: 'cash', label: 'Finanzas' },
   { key: 'purchases', label: 'Compras' },
   { key: 'sales', label: 'Ventas' },
   { key: 'debtors', label: 'Deudores' },
