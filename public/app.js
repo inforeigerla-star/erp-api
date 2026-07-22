@@ -2768,7 +2768,7 @@ function opActions(kind, op) {
   if (op.status === 'PENDING') {
     return `
       <button class="btn btn-sm" onclick="confirmOperation('${kind}', ${op.id})">Confirmar</button>
-      <button class="btn btn-sm" onclick="openEditDateModal('${kind}', ${op.id}, '${String(op.date).slice(0, 10)}')">Editar fecha</button>
+      <button class="btn btn-sm" onclick="openEditOperationModal('${kind}', ${op.id})">Editar</button>
       <button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>
     `;
   }
@@ -3226,43 +3226,51 @@ function reorderWithPreferred(items, preferredId) {
   return copy;
 }
 
-function newOperationModal(kind) {
+// `existing` (Bloque 2): si viene, el modal entra en modo edición precargado
+// con `{ sale|purchase, items, ... }` (misma forma que devuelve
+// GET /sales/:id/full y GET /purchases/:id/full). Sin `existing`, se
+// comporta exactamente igual que antes (alta nueva).
+function newOperationModal(kind, existing) {
   window._stockLookup = null;
   const isPurchase = kind === 'purchase';
-  const contactItems = (isPurchase ? state.cache.suppliers : state.cache.customers)
-    .map(c => ({ id: c.id, label: c.name }));
-  const whItems = reorderWithPreferred(whByBU().map(w => ({ id: w.id, label: w.name })), getRememberedChoice('warehouse', state.selectedBU));
-  const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  const op = existing ? (isPurchase ? existing.purchase : existing.sale) : null;
+  const contactItems = reorderWithPreferred(
+    (isPurchase ? state.cache.suppliers : state.cache.customers).map(c => ({ id: c.id, label: c.name })),
+    op ? (isPurchase ? op.supplier_id : op.customer_id) : null
+  );
+  const whItems = reorderWithPreferred(whByBU().map(w => ({ id: w.id, label: w.name })), op ? op.warehouse_id : getRememberedChoice('warehouse', state.selectedBU));
+  const projItemsBase = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+  const projItems = op && op.project_id ? reorderWithPreferred(projItemsBase, op.project_id) : projItemsBase;
   const cashBoxItems = reorderWithPreferred(
     state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})` })),
-    getRememberedChoice('cashbox', state.selectedBU)
+    op ? op.cash_box_id : getRememberedChoice('cashbox', state.selectedBU)
   );
 
   lineItemCount = 0;
   totalManuallyEdited = false;
   openModal(`
-    <h2>${isPurchase ? 'Nueva compra' : 'Nueva venta'}</h2>
+    <h2>${op ? `Editar ${isPurchase ? 'compra' : 'venta'} #${op.id}` : (isPurchase ? 'Nueva compra' : 'Nueva venta')}</h2>
     <input type="hidden" id="f_quote_id" value="">
-    ${!isPurchase ? `
+    ${!isPurchase && !op ? `
     <div style="margin-bottom:14px">
       <button class="btn btn-sm" onclick="openLoadQuoteModal()">Cargar desde presupuesto</button>
       <span class="hint" id="loadedQuoteLabel"></span>
     </div>` : ''}
     <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
-      ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`)}
+      ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`, contactItems[0]?.label)}
     </div>
     <div class="field"><label>Fecha</label>
-      <input type="date" id="f_date" value="${new Date().toISOString().slice(0, 10)}">
+      <input type="date" id="f_date" value="${op ? String(op.date).slice(0, 10) : new Date().toISOString().slice(0, 10)}">
     </div>
     <div class="field-row">
       <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…', whItems[0]?.label)}</div>
-      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', projItems[0]?.label || 'Sin proyecto')}</div>
     </div>
     <div class="field"><label>Forma de pago</label>
       <select id="f_payment" onchange="togglePaymentBoxField(${isPurchase})">
-        <option value="CASH">Contado</option>
-        <option value="ACCOUNT">Cuenta corriente</option>
-        ${!isPurchase ? '<option value="UNCOLLECTED">Factura sin cobrar (procesar después)</option>' : ''}
+        <option value="CASH" ${!op || op.payment_type === 'CASH' ? 'selected' : ''}>Contado</option>
+        <option value="ACCOUNT" ${op && op.payment_type === 'ACCOUNT' ? 'selected' : ''}>Cuenta corriente</option>
+        ${!isPurchase ? `<option value="UNCOLLECTED" ${op && op.payment_type === 'UNCOLLECTED' ? 'selected' : ''}>Factura sin cobrar (procesar después)</option>` : ''}
       </select>
     </div>
     <div class="field" id="paymentBoxField" style="display:none">
@@ -3280,8 +3288,8 @@ function newOperationModal(kind) {
     <div class="field-row">
       <div class="field"><label>Moneda de la venta</label>
         <select id="f_sale_currency" onchange="refreshAllLinePrices()">
-          <option value="ARS">Pesos argentinos (ARS)</option>
-          <option value="USD">Dólares (USD)</option>
+          <option value="ARS" ${!op || op.currency === 'ARS' ? 'selected' : ''}>Pesos argentinos (ARS)</option>
+          <option value="USD" ${op && op.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
         </select>
       </div>
       <div class="field"><label>Precios</label>
@@ -3292,20 +3300,41 @@ function newOperationModal(kind) {
       </div>
     </div>` : ''}
 
-    ${!isPurchase ? `
+    <div class="field">
+      <label>Descuento (opcional)</label>
+      <input id="f_discount" type="text" inputmode="decimal" placeholder="0" value="${op && Number(op.discount_amount) ? formatMoneyFieldValue(op.discount_amount) : ''}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
+      <div class="hint">Se resta del total calculado a partir de los artículos. Si supera la suma de líneas, el total queda en $0.</div>
+    </div>
+
+    <div class="field">
+      <label>Observaciones (opcional)</label>
+      <textarea id="f_notes" rows="2" style="width:100%">${op ? escAttr(op.notes) : ''}</textarea>
+    </div>
+
+    ${!isPurchase && !op ? `
     <div class="field">
       <label>Importe final (editable)</label>
       <input id="f_total_override" type="text" inputmode="decimal" placeholder="Se calcula solo, pero podés modificarlo" oninput="markTotalAsManual()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
       <div class="hint" id="totalHint">Se calcula automáticamente a partir de los artículos. Podés cambiarlo manualmente si necesitás ajustarlo.</div>
     </div>` : ''}
 
+    ${op ? `
+    <div style="margin-top:6px">
+      <button class="btn btn-sm" onclick="toggleAuditHistory('${isPurchase ? 'purchase' : 'sale'}', ${op.id})">Ver historial de cambios</button>
+      <div id="auditHistoryBox" style="display:none;margin-top:10px"></div>
+    </div>` : ''}
+
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="createOperation('${kind}')">Guardar</button>
+      <button class="btn btn-primary" onclick="${op ? `updateOperation('${kind}', ${op.id})` : `createOperation('${kind}')`}">Guardar</button>
     </div>
   `);
   togglePaymentBoxField(isPurchase);
-  addLineItem(kind);
+  if (op && existing.items && existing.items.length) {
+    existing.items.forEach(item => addExistingLineItem(kind, item));
+  } else {
+    addLineItem(kind);
+  }
 }
 let totalManuallyEdited = false;
 function markTotalAsManual() {
@@ -3370,6 +3399,30 @@ function addLineItem(kind) {
       if (r) r.style.display = 'none';
     }
   });
+}
+
+// Fila de línea ya conocida (Bloque 2, edición) o cargada de un presupuesto:
+// mismo patrón que usa loadQuoteIntoForm, artículo fijo (no buscador) con
+// cantidad y precio editables.
+function addExistingLineItem(kind, item) {
+  const isPurchase = kind === 'purchase';
+  const id = lineItemCount++;
+  const container = document.getElementById('lineItems');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `line_${id}`;
+  row.dataset.articleId = item.article_id;
+  const price = isPurchase ? item.unit_cost : item.unit_price;
+  row.innerHTML = `
+    <div class="article-search-wrap">
+      <input type="text" class="article-search-input" id="artsearch_${id}" value="${escAttr(item.code + ' — ' + item.description)}" readonly>
+      <input type="hidden" id="artid_${id}" value="${item.article_id}">
+    </div>
+    <input type="number" step="0.001" id="qty_${id}" value="${item.quantity}" oninput="recalcLineItemsTotal()">
+    <input type="text" inputmode="decimal" id="price_${id}" value="${formatMoneyFieldValue(price)}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
+  `;
+  container.appendChild(row);
 }
 function articleSearchKeydown(e, id) {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
@@ -3542,7 +3595,10 @@ function refreshAllLinePrices() {
   });
 }
 
-async function createOperation(kind) {
+// Compartida entre alta (createOperation) y edición (updateOperation,
+// Bloque 2) para no repetir la lectura del formulario dos veces. Devuelve
+// null (y muestra el toast de error) si no hay artículos cargados.
+function buildOperationPayload(kind) {
   const isPurchase = kind === 'purchase';
   const rows = [...document.getElementById('lineItems').children];
   const items = rows.map(row => {
@@ -3554,7 +3610,7 @@ async function createOperation(kind) {
     };
   }).filter(i => i.article_id);
 
-  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return; }
+  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return null; }
 
   const payload = {
     business_unit_id: state.selectedBU,
@@ -3563,19 +3619,28 @@ async function createOperation(kind) {
     payment_type: document.getElementById('f_payment').value,
     cash_box_id: (!isPurchase && document.getElementById('f_payment').value === 'CASH') ? Number(getSearchableValue('cashbox')) : null,
     date: document.getElementById('f_date').value || undefined,
+    notes: document.getElementById('f_notes')?.value || null,
+    discount_amount: document.getElementById('f_discount')?.value ? parseMoneyInput(document.getElementById('f_discount').value) : 0,
     items,
   };
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));
   if (!isPurchase) {
     payload.currency = document.getElementById('f_sale_currency').value;
-    const overrideVal = document.getElementById('f_total_override').value;
-    if (overrideVal !== '') payload.total_override = parseMoneyInput(overrideVal);
+    const overrideField = document.getElementById('f_total_override');
+    if (overrideField && overrideField.value !== '') payload.total_override = parseMoneyInput(overrideField.value);
     const quoteIdVal = document.getElementById('f_quote_id')?.value;
     if (quoteIdVal) payload.quote_id = Number(quoteIdVal);
   }
+  return payload;
+}
+
+async function createOperation(kind) {
+  const isPurchase = kind === 'purchase';
+  const payload = buildOperationPayload(kind);
+  if (!payload) return;
 
   try {
-    const created = await api(`/${kind === 'purchase' ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });
+    const created = await api(`/${isPurchase ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });
     closeModal();
     toast(`${isPurchase ? 'Compra' : 'Venta'} creada como pendiente. Confirmala para mover stock y caja.`);
     window._flashKey = created.id;
@@ -3583,6 +3648,54 @@ async function createOperation(kind) {
     if (!isPurchase && payload.cash_box_id) rememberChoice('cashbox', state.selectedBU, payload.cash_box_id);
     renderView();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// Bloque 2 — edición completa mientras la operación está PENDIENTE. Reusa el
+// mismo formulario y el mismo armado de payload que la creación; el backend
+// valida de nuevo el estado PENDING por las dudas (no confiar solo en que el
+// botón "Editar" no aparezca una vez confirmada).
+async function updateOperation(kind, id) {
+  const isPurchase = kind === 'purchase';
+  const payload = buildOperationPayload(kind);
+  if (!payload) return;
+
+  try {
+    await api(`/${isPurchase ? 'purchases' : 'sales'}/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    closeModal();
+    toast(`${isPurchase ? 'Compra' : 'Venta'} actualizada.`);
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Abre el modal de edición precargado. `kind` llega en plural ('sales' /
+// 'purchases', igual que confirmOperation/cancelOperation) porque así lo
+// pasa opActions(); newOperationModal espera el singular.
+async function openEditOperationModal(kind, id) {
+  const isPurchase = kind === 'purchases';
+  try {
+    const full = await api(`/${kind}/${id}/full`);
+    newOperationModal(isPurchase ? 'purchase' : 'sale', full);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Historial de auditoría (Bloque 1) de una venta/compra puntual: se muestra
+// plegado dentro del propio modal de edición, sin abrir un modal nuevo
+// (el sistema de modal es único, no apila).
+async function toggleAuditHistory(tableName, recordId) {
+  const box = document.getElementById('auditHistoryBox');
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<div class="hint">Cargando…</div>';
+  try {
+    const rows = await api(`/audit-log/${tableName}/${recordId}`);
+    box.innerHTML = !rows.length
+      ? '<div class="hint">Todavía no hay cambios registrados.</div>'
+      : rows.map(r => `
+          <div style="border-top:1px solid #e5e5e5;padding:8px 0">
+            <div class="hint mono">${fmtDate(r.changed_at)} · ${escAttr(r.changed_by_username || 'usuario desconocido')} · ${r.action}</div>
+          </div>`).join('');
+  } catch (e) { box.innerHTML = `<div class="hint">${e.message}</div>`; }
 }
 
 // ---------------------------------------------------------

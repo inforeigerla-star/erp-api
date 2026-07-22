@@ -1100,6 +1100,79 @@ app.put('/purchases/:id/date', async (req, res) => {
   }
 });
 
+// Trae la compra + líneas + proveedor/depósito, para precargar el modal de
+// edición (Bloque 2). Mismo patrón que /sales/:id/full, que ya existía.
+app.get('/purchases/:id/full', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const purchaseR = await pool.query('SELECT * FROM purchase WHERE id=$1', [id]);
+    const purchase = purchaseR.rows[0];
+    if (!purchase) throw new Error('Compra no encontrada.');
+    const supplierR = await pool.query('SELECT * FROM supplier WHERE id=$1', [purchase.supplier_id]);
+    const whR = await pool.query('SELECT * FROM warehouse WHERE id=$1', [purchase.warehouse_id]);
+    const itemsR = await pool.query(`
+      SELECT pi.*, a.code, a.description
+      FROM purchase_item pi JOIN article a ON a.id = pi.article_id
+      WHERE pi.purchase_id=$1
+    `, [id]);
+    res.json({ purchase, supplier: supplierR.rows[0], warehouse: whR.rows[0], items: itemsR.rows });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Edición completa de una compra (Bloque 2): solo mientras está PENDING,
+// porque nada se movió todavía (stock/caja/cta-cte solo se tocan al
+// Confirmar). Reemplaza las líneas por las que llegan en el body, igual que
+// al crear, así el trigger fn_recalc_purchase_total recalcula el total solo
+// (ya usando el discount_amount actualizado, porque se guarda antes que las
+// líneas). Deja registro completo en audit_log (Bloque 1).
+app.put('/purchases/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { supplier_id, warehouse_id, project_id, payment_type, date, notes, discount_amount, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT * FROM purchase WHERE id=$1 FOR UPDATE', [id]);
+    const before = beforeR.rows[0];
+    if (!before) throw new Error('Compra no encontrada.');
+    if (before.status !== 'PENDING') throw new Error('Solo se puede editar una compra mientras está pendiente.');
+    const beforeItemsR = await client.query('SELECT article_id, quantity, unit_cost FROM purchase_item WHERE purchase_id=$1', [id]);
+
+    await client.query(
+      `UPDATE purchase SET supplier_id=$1, warehouse_id=$2, project_id=$3, payment_type=$4, date=$5, notes=$6, discount_amount=$7
+       WHERE id=$8`,
+      [supplier_id, warehouse_id, project_id || null, payment_type, date || before.date, notes || null, discount_amount || 0, id]
+    );
+
+    await client.query('DELETE FROM purchase_item WHERE purchase_id=$1', [id]);
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO purchase_item (purchase_id, article_id, quantity, unit_cost) VALUES ($1,$2,$3,$4)`,
+        [id, item.article_id, item.quantity, item.unit_cost]
+      );
+    }
+
+    const afterR = await client.query('SELECT * FROM purchase WHERE id=$1', [id]);
+    await logAudit(client, {
+      tableName: 'purchase', recordId: Number(id), action: 'EDIT',
+      oldValues: { ...before, items: beforeItemsR.rows },
+      newValues: { ...afterR.rows[0], items },
+      userId: req.user.id,
+    });
+
+    await client.query('COMMIT');
+    res.json(afterR.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/purchases/:id/cancel', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1421,6 +1494,58 @@ app.put('/sales/:id/date', async (req, res) => {
     res.json(updated.rows[0]);
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// Edición completa de una venta (Bloque 2): solo mientras está PENDING,
+// porque nada se movió todavía (stock/caja/cta-cte solo se tocan al
+// Confirmar). Reemplaza las líneas por las que llegan en el body, igual que
+// al crear, así el trigger fn_recalc_sale_total recalcula el total solo (ya
+// usando el discount_amount actualizado, porque se guarda antes que las
+// líneas). Deja registro completo en audit_log (Bloque 1).
+app.put('/sales/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { customer_id, warehouse_id, project_id, payment_type, cash_box_id, currency, date, notes, discount_amount, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT * FROM sale WHERE id=$1 FOR UPDATE', [id]);
+    const before = beforeR.rows[0];
+    if (!before) throw new Error('Venta no encontrada.');
+    if (before.status !== 'PENDING') throw new Error('Solo se puede editar una venta mientras está pendiente.');
+    const beforeItemsR = await client.query('SELECT article_id, quantity, unit_price FROM sale_item WHERE sale_id=$1', [id]);
+
+    await client.query(
+      `UPDATE sale SET customer_id=$1, warehouse_id=$2, project_id=$3, payment_type=$4, cash_box_id=$5, currency=$6, date=$7, notes=$8, discount_amount=$9
+       WHERE id=$10`,
+      [customer_id, warehouse_id, project_id || null, payment_type, cash_box_id || null, currency || 'ARS', date || before.date, notes || null, discount_amount || 0, id]
+    );
+
+    await client.query('DELETE FROM sale_item WHERE sale_id=$1', [id]);
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO sale_item (sale_id, article_id, quantity, unit_price) VALUES ($1,$2,$3,$4)`,
+        [id, item.article_id, item.quantity, item.unit_price]
+      );
+    }
+
+    const afterR = await client.query('SELECT * FROM sale WHERE id=$1', [id]);
+    await logAudit(client, {
+      tableName: 'sale', recordId: Number(id), action: 'EDIT',
+      oldValues: { ...before, items: beforeItemsR.rows },
+      newValues: { ...afterR.rows[0], items },
+      userId: req.user.id,
+    });
+
+    await client.query('COMMIT');
+    res.json(afterR.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
