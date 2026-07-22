@@ -70,6 +70,34 @@ app.use((req, res, next) => {
   next();
 });
 
+// ---------- AUDITORÍA DE EDICIONES (Compras/Ventas — Bloque 1) ----------
+// Distinta del "activity_log" de arriba: ese es un log general de toda
+// acción no-GET con un resumen corto (para uso interno/soporte). Esta tabla
+// es específica para el historial de auditoría que pidió Matias sobre la
+// edición de Compras/Ventas (a partir del Bloque 2): usuario, fecha/hora,
+// valores anteriores y nuevos de cada cambio, por registro puntual. Todavía
+// no la llama nadie — este bloque solo deja la infraestructura lista.
+async function logAudit(client, { tableName, recordId, action, oldValues, newValues, userId }) {
+  await client.query(
+    `INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, changed_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [tableName, recordId, action, oldValues ? JSON.stringify(oldValues) : null, newValues ? JSON.stringify(newValues) : null, userId || null]
+  );
+}
+
+app.get('/audit-log/:tableName/:recordId', async (req, res) => {
+  const { tableName, recordId } = req.params;
+  const r = await pool.query(
+    `SELECT al.*, u.username AS changed_by_username
+     FROM audit_log al
+     LEFT JOIN app_user u ON u.id = al.changed_by
+     WHERE al.table_name = $1 AND al.record_id = $2
+     ORDER BY al.changed_at DESC`,
+    [tableName, recordId]
+  );
+  res.json(r.rows);
+});
+
 app.post('/auth/verify-password', async (req, res) => {
   try {
     const { password } = req.body;
