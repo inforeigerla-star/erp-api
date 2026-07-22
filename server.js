@@ -1804,6 +1804,17 @@ app.get('/sales/pending-collection', async (req, res) => {
   res.json(r.rows);
 });
 
+// Desde el Bloque 9 (julio 2026), "Procesar cobro" verifica solo al toque
+// (ver /sales/:id/collect), así que esta lista ya no es "lo que falta
+// verificar" en sentido estricto — pasa a mostrar dos cosas distintas, que el
+// frontend separa visualmente con el flag `verified`:
+//   - verified=FALSE: lo que sigue en dos etapas de verdad (los movimientos
+//     en USD de una conversión bancaria en curso, o algún cobro viejo de
+//     antes de este bloque que haya quedado pendiente).
+//   - verified=TRUE: cobros en pesos ya confirmados que todavía se pueden
+//     convertir a USD (no tienen conversión bancaria registrada para su
+//     venta todavía). Quedan ahí sin límite de tiempo, hasta que se
+//     conviertan o se cancele la venta (pedido explícito de Matias).
 app.get('/sale-collections/pending', async (req, res) => {
   const r = await pool.query(`
     SELECT sc.*, s.customer_id, c.name AS customer_name, cb.name AS cash_box_name, cb.currency AS cash_box_currency,
@@ -1814,7 +1825,11 @@ app.get('/sale-collections/pending', async (req, res) => {
     JOIN cash_box cb ON cb.id = sc.cash_box_id
     JOIN business_unit bu ON bu.id = sc.business_unit_id
     WHERE sc.verified = FALSE
-    ORDER BY sc.created_at ASC
+       OR (
+         sc.verified = TRUE AND sc.direction <> 'OUT' AND cb.currency <> 'USD'
+         AND NOT EXISTS (SELECT 1 FROM sale_bank_conversion sbc WHERE sbc.sale_id = sc.sale_id)
+       )
+    ORDER BY sc.verified ASC, sc.created_at ASC
   `);
   res.json(r.rows);
 });
@@ -1830,6 +1845,31 @@ app.get('/sale-collections/by-business-unit/:businessUnitId', async (req, res) =
   res.json(r.rows);
 });
 
+// Crea el cash_movement real de un sale_collection y lo marca verificado.
+// Reutilizado por /sale-collections/:id/verify (verificación manual, para lo
+// que sigue en dos etapas: conversiones bancarias en curso y cobros viejos
+// pendientes de antes del Bloque 9) y por /sales/:id/collect (verificación
+// inmediata, ver Bloque 9). `sc` tiene que traer al menos: id, cash_session_id,
+// business_unit_id, project_id, amount, direction, sale_id.
+async function verifySaleCollectionRow(client, sc, userId) {
+  // direction='OUT' (conversión bancaria): los dólares salen de esta caja -> EXPENSE.
+  // direction='IN' (todo lo de siempre): el cobro entra a esta caja -> INCOME.
+  const movementType = sc.direction === 'OUT' ? 'EXPENSE' : 'INCOME';
+  const movementDesc = sc.direction === 'OUT'
+    ? `Entrega de USD por conversión bancaria — Venta #${sc.sale_id}`
+    : `Cobro Venta #${sc.sale_id}`;
+  const movR = await client.query(
+    `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+     VALUES ($1,$2,$3,$4,$5,$6,'SALE',$7) RETURNING id`,
+    [sc.cash_session_id, sc.business_unit_id, sc.project_id, movementType, sc.amount, movementDesc, sc.sale_id]
+  );
+  await client.query(
+    `UPDATE sale_collection SET verified=TRUE, verified_at=now(), verified_by=$1, cash_movement_id=$2 WHERE id=$3`,
+    [userId, movR.rows[0].id, sc.id]
+  );
+  return movR.rows[0].id;
+}
+
 app.post('/sale-collections/:id/verify', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1840,22 +1880,7 @@ app.post('/sale-collections/:id/verify', async (req, res) => {
     if (!sc) throw new Error('Cobro no encontrado.');
     if (sc.verified) throw new Error('Este cobro ya fue verificado.');
 
-    // direction='OUT' (conversión bancaria): los dólares salen de esta caja -> EXPENSE.
-    // direction='IN' (todo lo de siempre): el cobro entra a esta caja -> INCOME.
-    const movementType = sc.direction === 'OUT' ? 'EXPENSE' : 'INCOME';
-    const movementDesc = sc.direction === 'OUT'
-      ? `Entrega de USD por conversión bancaria — Venta #${sc.sale_id}`
-      : `Cobro Venta #${sc.sale_id} (verificado)`;
-    const movR = await client.query(
-      `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
-       VALUES ($1,$2,$3,$4,$5,$6,'SALE',$7) RETURNING id`,
-      [sc.cash_session_id, sc.business_unit_id, sc.project_id, movementType, sc.amount, movementDesc, sc.sale_id]
-    );
-
-    await client.query(
-      `UPDATE sale_collection SET verified=TRUE, verified_at=now(), verified_by=$1, cash_movement_id=$2 WHERE id=$3`,
-      [req.user.id, movR.rows[0].id, id]
-    );
+    await verifySaleCollectionRow(client, sc, req.user.id);
 
     await client.query('COMMIT');
     res.json({ ok: true });
@@ -1921,13 +1946,22 @@ app.post('/sales/:id/collect', async (req, res) => {
       const session = sessionR.rows[0];
       if (!session) throw new Error(`La caja seleccionada no tiene una sesión abierta.`);
 
-      await client.query(
+      // Bloque 9 (julio 2026): el impacto instantáneo es solo para cobros en
+      // PESOS. Los cobros en dólares siguen el flujo clásico de 2 etapas
+      // (quedan pendientes en "Verificar cobros" con "Confirmar movimiento
+      // físico"), porque ahí es donde se hace el movimiento manual real de
+      // esa venta en USD.
+      const cbR = await client.query(`SELECT currency FROM cash_box WHERE id=$1`, [split.cash_box_id]);
+      const cashBoxCurrency = cbR.rows[0]?.currency;
+
+      const scR = await client.query(
         `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, verified)
-         VALUES ($1,$2,$3,$4,$5,$6,FALSE)`,
+         VALUES ($1,$2,$3,$4,$5,$6,FALSE) RETURNING *`,
         [sale.id, split.cash_box_id, session.id, sale.business_unit_id, split.project_id || null, split.amount]
       );
-      // El movimiento de caja NO se crea todavía: queda pendiente hasta que se verifique
-      // que el dinero se movió físicamente a esa caja/sobre (ver /sale-collections/:id/verify).
+      if (cashBoxCurrency !== 'USD') {
+        await verifySaleCollectionRow(client, scR.rows[0], req.user.id);
+      }
     }
 
     if (sale.payment_type === 'ACCOUNT') {
@@ -1951,22 +1985,25 @@ app.post('/sales/:id/collect', async (req, res) => {
   }
 });
 
-// Cobro con conversión bancaria: el cliente pagó el saldo pendiente por
-// transferencia a un banco (ej. Banco Macro) en pesos. Esos pesos NO generan
-// ningún movimiento de caja (quedan solo registrados acá, como referencia).
-// La empresa entrega en cambio un monto en USD decidido manualmente por
-// Matias (sin cálculo de TC), que sale de UNA caja/sobre de origen y se
-// reparte entre una o varias cajas/sobres destino. Esos dólares sí usan el
-// mismo mecanismo de siempre (sale_collection + cash_movement) y quedan
+// Conversión bancaria: paso OPCIONAL entre "Procesar cobro" y "Verificar
+// cobro" (Bloque 8, julio 2026 — reemplaza el flujo anterior que actuaba
+// sobre la venta completa como alternativa a "Procesar cobro"). Parte de un
+// sale_collection ya creado y todavía sin verificar: ese cobro en pesos se
+// pagó por transferencia a un banco (ej. Banco Macro), nunca llegó
+// físicamente a la caja/sobre con la que se registró, así que se da de baja
+// SIN tocar sale.settled_amount (la venta ya estaba bien marcada como
+// cobrada desde "Procesar cobro"). La empresa entrega en cambio un monto en
+// USD decidido manualmente (sin cálculo de TC), que sale de UNA caja/sobre de
+// origen y se reparte entre una o varias cajas/sobres destino. Esos dólares
+// sí usan el mismo mecanismo de siempre (sale_collection) y quedan
 // pendientes en "Verificar cobros" hasta que se confirme el movimiento físico.
-app.post('/sales/:id/bank-conversion', async (req, res) => {
+app.post('/sale-collections/:id/convert-to-usd', async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { bank_name, amount_ars, usd_equivalent, notes, origin_cash_box_id, origin_project_id, destination_splits } = req.body;
+    const { bank_name, usd_equivalent, notes, origin_cash_box_id, origin_project_id, destination_splits } = req.body;
 
     if (!bank_name) throw new Error('Indicá el banco (ej. Banco Macro).');
-    if (!amount_ars || Number(amount_ars) <= 0) throw new Error('El monto en pesos debe ser mayor a cero.');
     if (!usd_equivalent || Number(usd_equivalent) <= 0) throw new Error('Indicá el equivalente en dólares.');
     if (!origin_cash_box_id) throw new Error('Elegí la caja/sobre de origen de los dólares.');
     if (!destination_splits || !destination_splits.length) throw new Error('Agregá al menos una caja/sobre destino.');
@@ -1978,18 +2015,18 @@ app.post('/sales/:id/bank-conversion', async (req, res) => {
 
     await client.query('BEGIN');
 
-    const saleR = await client.query('SELECT * FROM sale WHERE id=$1 FOR UPDATE', [id]);
-    const sale = saleR.rows[0];
-    if (!sale) throw new Error('Venta no encontrada.');
-    if (!['UNCOLLECTED', 'ACCOUNT', 'CASH'].includes(sale.payment_type)) throw new Error('Tipo de venta no admite procesar cobro.');
+    const scR = await client.query(
+      `SELECT sc.*, cb.currency AS cash_box_currency
+       FROM sale_collection sc JOIN cash_box cb ON cb.id = sc.cash_box_id
+       WHERE sc.id=$1 FOR UPDATE OF sc`,
+      [id]
+    );
+    const sc = scR.rows[0];
+    if (!sc) throw new Error('Cobro no encontrado.');
+    if (sc.direction === 'OUT') throw new Error('Este movimiento ya es una salida de dólares, no se puede convertir.');
+    if (sc.cash_box_currency === 'USD') throw new Error('Este cobro ya está en dólares, no hace falta convertirlo.');
 
-    const remaining = Number(sale.total_amount) - Number(sale.settled_amount);
-    if (remaining <= 0.01) throw new Error('Esta venta ya está cobrada.');
-    if (Math.abs(Number(amount_ars) - remaining) > 0.01) {
-      throw new Error(`El monto en pesos ($${amount_ars}) debe coincidir con el saldo pendiente de la venta ($${remaining}).`);
-    }
-
-    const existing = await client.query('SELECT id FROM sale_bank_conversion WHERE sale_id=$1', [id]);
+    const existing = await client.query('SELECT id FROM sale_bank_conversion WHERE sale_id=$1', [sc.sale_id]);
     if (existing.rows[0]) throw new Error('Esta venta ya tiene una conversión bancaria registrada.');
 
     const originR = await client.query('SELECT * FROM cash_box WHERE id=$1', [origin_cash_box_id]);
@@ -2001,12 +2038,25 @@ app.post('/sales/:id/bank-conversion', async (req, res) => {
     const conv = await client.query(
       `INSERT INTO sale_bank_conversion (sale_id, bank_name, amount_ars, usd_equivalent, notes, created_by)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [id, bank_name, amount_ars, usd_equivalent, notes || null, req.user.id]
+      [sc.sale_id, bank_name, sc.amount, usd_equivalent, notes || null, req.user.id]
     );
 
-    // El cliente ya pagó: se cierra el saldo en pesos de la venta de una sola vez,
-    // sin crear ningún sale_collection/cash_movement para ese monto.
-    await client.query('UPDATE sale SET settled_amount = total_amount WHERE id=$1', [id]);
+    // Desde el Bloque 9, un cobro normal ya impactó la caja/sobre al procesarse
+    // (sc.verified=TRUE). Como en realidad esos pesos nunca llegaron ahí, hay
+    // que revertir ese movimiento antes de dar de baja el cobro — mismo
+    // mecanismo que ya usa "Cancelar" para cobros verificados. Si viniera de
+    // un cobro viejo, de antes del Bloque 9, que todavía estuviera sin
+    // verificar, no hay nada que revertir.
+    if (sc.verified) {
+      await client.query(
+        `INSERT INTO cash_movement (cash_session_id, business_unit_id, project_id, type, amount, description, origin_type, origin_id)
+         VALUES ($1,$2,$3,'EXPENSE',$4,$5,'SALE',$6)`,
+        [sc.cash_session_id, sc.business_unit_id, sc.project_id, sc.amount, `Reversa cobro por conversión bancaria — Venta #${sc.sale_id}`, sc.sale_id]
+      );
+    }
+    // settled_amount de la venta NO se toca: ya estaba bien contado desde
+    // "Procesar cobro", esto solo cambia CÓMO se termina de cobrar.
+    await client.query('DELETE FROM sale_collection WHERE id=$1', [id]);
 
     // Egreso pendiente de verificar: los dólares que salen de la caja/sobre de origen.
     const originSessR = await client.query(
@@ -2019,7 +2069,7 @@ app.post('/sales/:id/bank-conversion', async (req, res) => {
     await client.query(
       `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, direction, affects_settled_amount, verified)
        VALUES ($1,$2,$3,$4,$5,$6,'OUT',FALSE,FALSE)`,
-      [sale.id, origin_cash_box_id, originSess.id, sale.business_unit_id, origin_project_id || null, usd_equivalent]
+      [sc.sale_id, origin_cash_box_id, originSess.id, sc.business_unit_id, origin_project_id || null, usd_equivalent]
     );
 
     // Ingresos pendientes de verificar: los dólares que entran a cada caja/sobre destino.
@@ -2039,12 +2089,12 @@ app.post('/sales/:id/bank-conversion', async (req, res) => {
       await client.query(
         `INSERT INTO sale_collection (sale_id, cash_box_id, cash_session_id, business_unit_id, project_id, amount, direction, affects_settled_amount, verified)
          VALUES ($1,$2,$3,$4,$5,$6,'IN',FALSE,FALSE)`,
-        [sale.id, split.cash_box_id, sess.id, sale.business_unit_id, split.project_id || null, split.amount]
+        [sc.sale_id, split.cash_box_id, sess.id, sc.business_unit_id, split.project_id || null, split.amount]
       );
     }
 
     await client.query('COMMIT');
-    const updated = await pool.query('SELECT * FROM sale WHERE id=$1', [id]);
+    const updated = await pool.query('SELECT * FROM sale WHERE id=$1', [sc.sale_id]);
     res.json({ sale: updated.rows[0], bank_conversion: conv.rows[0] });
   } catch (e) {
     await client.query('ROLLBACK');

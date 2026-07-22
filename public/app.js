@@ -2398,13 +2398,20 @@ async function renderSales() {
   ]);
   const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
   const verifyBU = verifyPending.filter(p => p.business_unit_id === state.selectedBU);
+  // Desde el Bloque 9, esta lista trae dos cosas distintas (ver /sale-collections/pending):
+  // lo que realmente sigue en dos etapas (sin verificar todavía) y los cobros
+  // ya confirmados que igual se pueden convertir a USD. El número en la
+  // pestaña solo cuenta lo primero, para no mostrar una alarma que en
+  // realidad no requiere ninguna acción urgente.
+  const verifyTrulyPending = verifyBU.filter(p => !p.verified);
+  const verifyConvertible = verifyBU.filter(p => p.verified);
 
   const tabsHtml = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
       <div style="display:flex;gap:8px">
         <button class="btn btn-sm ${salesSubTab === 'sales' ? 'btn-primary' : ''}" onclick="switchSalesTab('sales')">Ventas</button>
         <button class="btn btn-sm ${salesSubTab === 'collect' ? 'btn-primary' : ''}" onclick="switchSalesTab('collect')">Procesar cobro ${pendingBU.length ? `(${pendingBU.length})` : ''}</button>
-        <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyBU.length ? `(${verifyBU.length})` : ''}</button>
+        <button class="btn btn-sm ${salesSubTab === 'verify' ? 'btn-primary' : ''}" onclick="switchSalesTab('verify')">Verificar cobros ${verifyTrulyPending.length ? `(${verifyTrulyPending.length})` : ''}</button>
       </div>
       <button class="btn btn-sm ${salesSubTab === 'documents' ? 'btn-primary' : ''}" onclick="switchSalesTab('documents')">Comprobantes y remitos</button>
     </div>`;
@@ -2458,7 +2465,6 @@ async function renderSales() {
             <td>
               <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
               <button class="btn btn-sm btn-primary" onclick="openCollectModal(${s.id}, ${s.remaining_amount})">Procesar cobro</button>
-              <button class="btn btn-sm" onclick="openBankConversionModal(${s.id}, ${s.remaining_amount})">Cobro con conversión bancaria</button>
             </td>
             <td style="white-space:nowrap">
               <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
@@ -2470,16 +2476,16 @@ async function renderSales() {
   }
 
   if (salesSubTab === 'verify') {
-    const totalPending = verifyBU.reduce((a, p) => a + Number(p.amount), 0);
+    const totalPending = verifyTrulyPending.reduce((a, p) => a + Number(p.amount), 0);
     el.innerHTML = tabsHtml + `
       <div class="kpi-row">
-        <div class="kpi"><div class="kpi-label">Cobros esperando verificación</div><div class="kpi-value">${verifyBU.length}</div></div>
+        <div class="kpi"><div class="kpi-label">Cobros esperando verificación</div><div class="kpi-value">${verifyTrulyPending.length}</div></div>
         <div class="kpi"><div class="kpi-label">Monto total pendiente</div><div class="kpi-value expense">$ ${fmtMoney(totalPending)}</div></div>
       </div>
       <div class="card">
-        <div class="card-title">Cobros que todavía no se movieron físicamente a su caja/sobre</div>
-        <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el dinero cobrado en una venta ya se guardó realmente en la caja o sobre elegido. Hasta que se verifique, no afecta el saldo de esa caja.</div>
-        ${tableOrEmpty(verifyBU, ['Fecha', 'Venta', 'Cliente', 'Movimiento', 'Caja / Sobre', 'Monto', ''], (p) => `
+        <div class="card-title">Pendientes de confirmar</div>
+        <div class="hint" style="margin-bottom:14px">Los dólares de una conversión bancaria en curso siguen pidiendo esta confirmación aparte. Hasta que se verifique, no afectan el saldo de esa caja.</div>
+        ${tableOrEmpty(verifyTrulyPending, ['Fecha', 'Venta', 'Cliente', 'Movimiento', 'Caja / Sobre', 'Monto', ''], (p) => `
           <tr>
             <td class="mono">${fmtDate(p.created_at)}</td>
             <td class="mono">#${p.sale_id}</td>
@@ -2489,9 +2495,23 @@ async function renderSales() {
             <td class="num ${p.direction === 'OUT' ? 'expense' : 'income'}">${p.cash_box_currency === 'USD' ? 'US$' : '$'} ${fmtMoney(p.amount)}</td>
             <td>
               <button class="btn btn-sm btn-primary" onclick="verifySaleCollection(${p.id})">Confirmar movimiento físico</button>
+              ${p.direction !== 'OUT' && p.cash_box_currency !== 'USD' ? `<button class="btn btn-sm" onclick="openBankConversionModal(${p.id}, ${p.sale_id}, ${p.amount})">Convertir a USD</button>` : ''}
               <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
             </td>
-          </tr>`, 'No hay cobros esperando verificación. Todo lo cobrado ya está confirmado en su caja o sobre.')}
+          </tr>`, 'No hay cobros esperando verificación.')}
+      </div>
+      <div class="card">
+        <div class="card-title">Cobros confirmados — todavía se pueden convertir a USD</div>
+        <div class="hint" style="margin-bottom:14px">Ya impactaron en el saldo de su caja/sobre. Quedan acá disponibles por si alguno necesita convertirse a dólares; no hace falta ninguna acción si no.</div>
+        ${tableOrEmpty(verifyConvertible, ['Fecha', 'Venta', 'Cliente', 'Caja / Sobre', 'Monto', ''], (p) => `
+          <tr>
+            <td class="mono">${fmtDate(p.created_at)}</td>
+            <td class="mono">#${p.sale_id}</td>
+            <td>${p.customer_name}</td>
+            <td>${p.cash_box_name}</td>
+            <td class="num income">$ ${fmtMoney(p.amount)}</td>
+            <td><button class="btn btn-sm" onclick="openBankConversionModal(${p.id}, ${p.sale_id}, ${p.amount})">Convertir a USD</button></td>
+          </tr>`, 'No hay cobros confirmados pendientes de convertir.')}
       </div>`;
     return;
   }
@@ -2644,25 +2664,30 @@ async function submitCollect(saleId) {
   try {
     await api(`/sales/${saleId}/collect`, { method: 'POST', body: JSON.stringify({ splits }) });
     closeModal();
-    toast('Cobro registrado. Queda pendiente de verificación física en "Verificar cobros".');
+    toast('Cobro registrado. Ya impacta en el saldo de la caja/sobre.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---------------------------------------------------------
-// COBRO CON CONVERSIÓN BANCARIA (ARS por transferencia -> USD entregado físicamente)
+// CONVERSIÓN BANCARIA (paso opcional entre Procesar cobro y Verificar cobro):
+// el cliente pagó por transferencia a un banco, en pesos, un cobro que ya se
+// había registrado con "Procesar cobro" y todavía no se verificó. Ese cobro
+// en pesos se da de baja (nunca llega físicamente a esa caja/sobre) y en su
+// lugar la empresa entrega dólares físicos, que sí siguen el camino normal
+// de "Verificar cobros".
 // ---------------------------------------------------------
-async function openBankConversionModal(saleId, remaining) {
+async function openBankConversionModal(collectionId, saleId, amountArs) {
   const usdBoxItems = state.cache.cashBoxes.filter(b => b.currency === 'USD').map(b => ({ id: b.id, label: b.name }));
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
   window._bankConvBoxItems = usdBoxItems;
   window._bankConvProjItems = projItems;
 
   openModal(`
-    <h2>Cobro con conversión bancaria — Venta #${saleId}</h2>
+    <h2>Conversión bancaria — Venta #${saleId}</h2>
     <div class="hint" style="margin-bottom:14px">
-      El cliente pagó el saldo pendiente (<strong>$ ${fmtMoney(remaining)}</strong>) por transferencia a un banco.
-      Ese dinero NO entra a ninguna caja del sistema. A cambio, la empresa entrega dólares físicos:
+      Este cobro (<strong>$ ${fmtMoney(amountArs)}</strong>) se pagó por transferencia a un banco, en vez de entrar físicamente
+      a la caja/sobre con la que se registró. Ese cobro en pesos se da de baja. A cambio, la empresa entrega dólares físicos:
       elegí de qué sobre/caja salen y entre cuáles se reparten.
     </div>
     <div class="form-row">
@@ -2686,7 +2711,7 @@ async function openBankConversionModal(saleId, remaining) {
     <button class="btn btn-sm" onclick="addBankConvSplit()">+ Agregar caja</button>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="submitBankConversion(${saleId}, ${remaining})">Confirmar conversión</button>
+      <button class="btn btn-primary" onclick="submitBankConversion(${collectionId})">Confirmar conversión</button>
     </div>
   `);
   addBankConvSplit();
@@ -2706,7 +2731,7 @@ function addBankConvSplit() {
   `;
   container.appendChild(row);
 }
-async function submitBankConversion(saleId, amountArs) {
+async function submitBankConversion(collectionId) {
   const bank_name = document.getElementById('bcBank').value.trim();
   const usd_equivalent = parseMoneyInput(document.getElementById('bcUsd').value);
   const notes = document.getElementById('bcNotes').value.trim();
@@ -2726,14 +2751,12 @@ async function submitBankConversion(saleId, amountArs) {
   if (!usd_equivalent || usd_equivalent <= 0) { toast('Indicá el equivalente en dólares.', 'error'); return; }
   if (!origin_cash_box_id) { toast('Elegí la caja/sobre de origen.', 'error'); return; }
   if (!destination_splits.length) { toast('Agregá al menos una caja/sobre destino.', 'error'); return; }
+  if (!(await verifyPasswordPrompt('convertir este cobro a dólares', true))) return;
 
   try {
-    await api(`/sales/${saleId}/bank-conversion`, {
+    await api(`/sale-collections/${collectionId}/convert-to-usd`, {
       method: 'POST',
-      body: JSON.stringify({
-        bank_name, amount_ars: amountArs, usd_equivalent, notes,
-        origin_cash_box_id, destination_splits,
-      }),
+      body: JSON.stringify({ bank_name, usd_equivalent, notes, origin_cash_box_id, destination_splits }),
     });
     closeModal();
     toast('Conversión registrada. Los movimientos en dólares quedan pendientes en "Verificar cobros".');
