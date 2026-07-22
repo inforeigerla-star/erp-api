@@ -2471,6 +2471,19 @@ async function renderSales() {
               <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
             </td>
           </tr>`, 'No hay facturas pendientes de procesar en esta unidad.')}
+      </div>
+      <div class="card">
+        <div class="card-title">Cobros confirmados — todavía se pueden convertir a USD</div>
+        <div class="hint" style="margin-bottom:14px">Ya impactaron en el saldo de su caja/sobre. Quedan acá disponibles por si alguno necesita convertirse a dólares; no hace falta ninguna acción si no.</div>
+        ${tableOrEmpty(verifyConvertible, ['Fecha', 'Venta', 'Cliente', 'Caja / Sobre', 'Monto', ''], (p) => `
+          <tr>
+            <td class="mono">${fmtDate(p.created_at)}</td>
+            <td class="mono">#${p.sale_id}</td>
+            <td>${p.customer_name}</td>
+            <td>${p.cash_box_name}</td>
+            <td class="num income">$ ${fmtMoney(p.amount)}</td>
+            <td><button class="btn btn-sm" onclick="openBankConversionModal(${p.id}, ${p.sale_id}, ${p.amount})">Convertir a USD</button></td>
+          </tr>`, 'No hay cobros confirmados pendientes de convertir.')}
       </div>`;
     return;
   }
@@ -2499,19 +2512,6 @@ async function renderSales() {
               <button class="btn btn-sm btn-danger" onclick="rejectSaleCollection(${p.id})">Rechazar</button>
             </td>
           </tr>`, 'No hay cobros esperando verificación.')}
-      </div>
-      <div class="card">
-        <div class="card-title">Cobros confirmados — todavía se pueden convertir a USD</div>
-        <div class="hint" style="margin-bottom:14px">Ya impactaron en el saldo de su caja/sobre. Quedan acá disponibles por si alguno necesita convertirse a dólares; no hace falta ninguna acción si no.</div>
-        ${tableOrEmpty(verifyConvertible, ['Fecha', 'Venta', 'Cliente', 'Caja / Sobre', 'Monto', ''], (p) => `
-          <tr>
-            <td class="mono">${fmtDate(p.created_at)}</td>
-            <td class="mono">#${p.sale_id}</td>
-            <td>${p.customer_name}</td>
-            <td>${p.cash_box_name}</td>
-            <td class="num income">$ ${fmtMoney(p.amount)}</td>
-            <td><button class="btn btn-sm" onclick="openBankConversionModal(${p.id}, ${p.sale_id}, ${p.amount})">Convertir a USD</button></td>
-          </tr>`, 'No hay cobros confirmados pendientes de convertir.')}
       </div>`;
     return;
   }
