@@ -191,8 +191,21 @@ async function loadBusinessUnits() {
   sel.innerHTML = state.businessUnits.map(bu => `<option value="${bu.id}">${bu.name}</option>`).join('');
   state.selectedBU = state.selectedBU && state.businessUnits.some(b => b.id === state.selectedBU) ? state.selectedBU : (state.businessUnits[0]?.id || null);
   sel.value = state.selectedBU;
-  sel.onchange = () => { state.selectedBU = Number(sel.value); applyBUTheme(); renderView(); };
+  sel.onchange = () => selectBusinessUnit(Number(sel.value));
   applyBUTheme();
+}
+function selectBusinessUnit(id) {
+  state.selectedBU = id;
+  const sel = document.getElementById('buSelect');
+  if (sel) sel.value = id;
+  applyBUTheme();
+  renderView();
+}
+function cycleBusinessUnit(direction) {
+  if (!state.businessUnits.length) return;
+  const idx = state.businessUnits.findIndex(b => b.id === state.selectedBU);
+  const nextIdx = ((idx === -1 ? 0 : idx) + direction + state.businessUnits.length) % state.businessUnits.length;
+  selectBusinessUnit(state.businessUnits[nextIdx].id);
 }
 
 const BU_THEME = {
@@ -311,6 +324,38 @@ async function renderView() {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}<br><button class="btn btn-sm" style="margin-top:10px" onclick="renderView()">Reintentar</button></div>`;
   }
 }
+
+// ---------------------------------------------------------
+// Atajos de teclado globales
+// ---------------------------------------------------------
+// Buscador propio por vista (se usa con "/"). Al sumar buscador a más listas
+// (Bloque 5 de la optimización UX), alcanza con agregar la entrada acá.
+const VIEW_SEARCH_INPUT = { articles: 'articlesSearchInput' };
+function isTypingTarget(target) {
+  const tag = (target?.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable;
+}
+document.addEventListener('keydown', (e) => {
+  if (isTypingTarget(e.target)) return; // no interferir con la carga normal de datos
+  if (document.getElementById('modalBackdrop').classList.contains('show')) return; // con un modal abierto, no
+
+  if (e.key === '/') {
+    const inputId = VIEW_SEARCH_INPUT[state.view];
+    const input = inputId && document.getElementById(inputId);
+    if (input) { e.preventDefault(); input.focus(); }
+    return;
+  }
+  if ((e.key === 'n' || e.key === 'N') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (state.view === 'sales' && salesSubTab === 'sales') { e.preventDefault(); newOperationModal('sale'); }
+    else if (state.view === 'purchases' && purchasesSubTab === 'purchases') { e.preventDefault(); newOperationModal('purchase'); }
+    return;
+  }
+  if (e.key === '[' || e.key === ']') {
+    e.preventDefault();
+    cycleBusinessUnit(e.key === ']' ? 1 : -1);
+    return;
+  }
+});
 
 // ---------------------------------------------------------
 // DASHBOARD
@@ -742,7 +787,7 @@ async function renderArticles() {
       <div class="section-toolbar">
         <div class="card-title" style="margin:0">Artículos</div>
         <div style="display:flex;gap:8px;align-items:center">
-          <input type="text" id="articlesSearchInput" value="${escAttr(articlesSearch)}" placeholder="Buscar por código o descripción…" style="width:260px" oninput="articlesSearchDebounced()">
+          <input type="text" id="articlesSearchInput" value="${escAttr(articlesSearch)}" placeholder="Buscar por código o descripción…" title="Atajo: /" style="width:260px" oninput="articlesSearchDebounced()">
           ${articlesSearch ? `<button class="btn btn-sm" onclick="articlesClearSearch()">Limpiar</button>` : ''}
         </div>
       </div>
@@ -1402,7 +1447,7 @@ function paginationControlsHtml(idPrefix, page, total, limit) {
 
 async function renderPurchases() {
   document.getElementById('viewActions').innerHTML = purchasesSubTab === 'purchases'
-    ? `<button class="btn btn-primary" onclick="newOperationModal('purchase')">+ Nueva compra</button>`
+    ? `<button class="btn btn-primary" onclick="newOperationModal('purchase')" title="Atajo: N">+ Nueva compra</button>`
     : '';
   const el = document.getElementById('view');
 
@@ -1780,7 +1825,7 @@ function addShipmentLineItem() {
   row.innerHTML = `
     <div class="article-search-wrap">
       <input type="text" class="article-search-input" id="artsearch_${id}" placeholder="Buscar por código, código alt. o nombre…"
-             autocomplete="off" oninput="filterShipmentArticleOptions(${id})" onfocus="filterShipmentArticleOptions(${id})">
+             autocomplete="off" oninput="filterShipmentArticleOptions(${id})" onfocus="filterShipmentArticleOptions(${id})" onkeydown="articleSearchKeydown(event, ${id})">
       <input type="hidden" id="artid_${id}">
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
@@ -1788,6 +1833,7 @@ function addShipmentLineItem() {
     <button class="remove-line" onclick="document.getElementById('line_${id}').remove();">×</button>
   `;
   container.appendChild(row);
+  document.getElementById(`artsearch_${id}`)?.focus();
 }
 async function selectShipmentArticleOption(id, articleId) {
   const article = artByBU().find(a => a.article_id === articleId);
@@ -2027,7 +2073,7 @@ let salesDateTo = '';
 
 async function renderSales() {
   document.getElementById('viewActions').innerHTML = salesSubTab === 'sales'
-    ? `<button class="btn btn-primary" onclick="newOperationModal('sale')">+ Nueva venta</button>`
+    ? `<button class="btn btn-primary" onclick="newOperationModal('sale')" title="Atajo: N">+ Nueva venta</button>`
     : '';
   const el = document.getElementById('view');
 
@@ -2938,7 +2984,7 @@ function addLineItem(kind) {
   row.innerHTML = `
     <div class="article-search-wrap">
       <input type="text" class="article-search-input" id="artsearch_${id}" placeholder="Buscar por código, código alt. o nombre…"
-             autocomplete="off" oninput="filterArticleOptions(${id}, ${isPurchase})" onfocus="filterArticleOptions(${id}, ${isPurchase})">
+             autocomplete="off" oninput="filterArticleOptions(${id}, ${isPurchase})" onfocus="filterArticleOptions(${id}, ${isPurchase})" onkeydown="articleSearchKeydown(event, ${id})">
       <input type="hidden" id="artid_${id}">
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
@@ -2948,6 +2994,7 @@ function addLineItem(kind) {
   `;
   container.appendChild(row);
   recalcLineItemsTotal();
+  document.getElementById(`artsearch_${id}`)?.focus();
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest(`#line_${id}`)) {
@@ -2955,6 +3002,29 @@ function addLineItem(kind) {
       if (r) r.style.display = 'none';
     }
   });
+}
+function articleSearchKeydown(e, id) {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+  const resultsEl = document.getElementById(`artresults_${id}`);
+  if (!resultsEl || resultsEl.style.display === 'none') return;
+  const items = [...resultsEl.querySelectorAll('.article-search-item')];
+  if (!items.length) return;
+  let activeIndex = items.findIndex(it => it.classList.contains('active'));
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    activeIndex = (activeIndex + 1) % items.length;
+    items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    activeIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+    items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const target = activeIndex >= 0 ? items[activeIndex] : items[0];
+    target.click(); // reutiliza el mismo onclick ya definido en cada ítem (selectArticleOption / selectShipmentArticleOption)
+  }
 }
 
 function filterArticleOptions(id, isPurchase) {
