@@ -161,6 +161,11 @@ function openModal(innerHtml) {
 function closeModal() {
   document.getElementById('modalBackdrop').classList.remove('show');
 }
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('modalBackdrop').classList.contains('show')) {
+    closeModal();
+  }
+});
 
 // ---------------------------------------------------------
 // Conexión
@@ -266,7 +271,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', debtors: 'Deudores', reports: 'Reportes',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', trash: 'Papelera', debtors: 'Deudores', reports: 'Reportes',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -299,6 +304,7 @@ async function renderView() {
       case 'projects': await renderProjects(); break;
       case 'cash': await renderFinance(); break;
       case 'users': await renderUsers(); break;
+      case 'trash': await renderTrash(); break;
       case 'debtors': await renderDebtors(); break;
     }
   } catch (e) {
@@ -480,12 +486,22 @@ function statusBadge(status) {
   return `<span class="badge badge-${map[status] || 'pending'}">${label[status] || status}</span>`;
 }
 
-function tableOrEmpty(rows, headers, rowFn, emptyMsg) {
+function tableOrEmpty(rows, headers, rowFn, emptyMsg, keyFn) {
   if (!rows.length) return `<div class="empty-state">${emptyMsg}</div>`;
+  // keyFn (opcional): si la fila coincide con window._flashKey, se resalta brevemente
+  // (se usa una sola vez y se limpia acá para no repetirse en el próximo render).
+  const flashKey = window._flashKey;
+  window._flashKey = null;
   return `
     <table class="ledger sortable-table">
       <thead><tr>${headers.map((h, i) => h ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>` : `<th></th>`).join('')}</tr></thead>
-      <tbody>${rows.map(rowFn).join('')}</tbody>
+      <tbody>${rows.map(r => {
+        const html = rowFn(r);
+        if (keyFn && flashKey != null && keyFn(r) === flashKey) {
+          return html.replace('<tr>', '<tr class="row-flash">');
+        }
+        return html;
+      }).join('')}</tbody>
     </table>`;
 }
 
@@ -1473,7 +1489,7 @@ async function renderPurchases() {
           <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
           <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
           <td>${opActions('purchases', p)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
-        </tr>`, 'No hay compras registradas en esta unidad.')}
+        </tr>`, 'No hay compras registradas en esta unidad.', (p) => p.id)}
       ${total ? paginationControlsHtml('purchases', purchasesPage, total, limit) : ''}
     </div>`;
 }
@@ -2160,7 +2176,7 @@ async function renderSales() {
             <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
             <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
           </td>
-        </tr>`, 'No hay ventas registradas en esta unidad.')}
+        </tr>`, 'No hay ventas registradas en esta unidad.', (s) => s.id)}
       ${total ? paginationControlsHtml('sales', salesPage, total, limit) : ''}
     </div>
   `;
@@ -2403,6 +2419,7 @@ async function confirmOperation(kind, id) {
   try {
     await api(`/${kind}/${id}/confirm`, { method: 'POST' });
     toast('Operación confirmada. Stock y caja actualizados.');
+    window._flashKey = id;
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2411,6 +2428,7 @@ async function cancelOperation(kind, id) {
   try {
     await api(`/${kind}/${id}/cancel`, { method: 'POST' });
     toast('Operación cancelada.');
+    window._flashKey = id;
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3036,6 +3054,26 @@ async function checkLineStock(id) {
     recalcLineItemsTotal();
   }
 }
+function confirmDangerous(titleHtml, messageHtml, confirmLabel) {
+  return new Promise((resolve) => {
+    document.querySelectorAll('.danger-confirm-overlay').forEach(el => el.remove());
+    const overlay = document.createElement('div');
+    overlay.className = 'danger-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="danger-confirm-box">
+        <div class="danger-confirm-icon">⚠️</div>
+        <div class="danger-confirm-title">${titleHtml}</div>
+        <div class="danger-confirm-text">${messageHtml}</div>
+        <div class="danger-confirm-actions">
+          <button class="btn" data-action="cancel">Cancelar</button>
+          <button class="btn btn-danger" data-action="continue" style="border-color:var(--danger);color:var(--danger)">${confirmLabel || 'Sí, continuar'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-action="cancel"]').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('[data-action="continue"]').onclick = () => { overlay.remove(); resolve(true); };
+  });
+}
 function showStockWarning(messageHtml) {
   return new Promise((resolve) => {
     document.querySelectorAll('.stock-warning-overlay').forEach(el => el.remove());
@@ -3099,9 +3137,10 @@ async function createOperation(kind) {
   }
 
   try {
-    await api(`/${kind === 'purchase' ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });
+    const created = await api(`/${kind === 'purchase' ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });
     closeModal();
     toast(`${isPurchase ? 'Compra' : 'Venta'} creada como pendiente. Confirmala para mover stock y caja.`);
+    window._flashKey = created.id;
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3782,28 +3821,7 @@ async function renderUsers() {
     <div style="display:flex;gap:8px;margin-bottom:18px">
       <button class="btn btn-sm ${usersSubTab === 'list' ? 'btn-primary' : ''}" onclick="switchUsersTab('list')">Usuarios</button>
       <button class="btn btn-sm ${usersSubTab === 'log' ? 'btn-primary' : ''}" onclick="switchUsersTab('log')">Registro de actividad</button>
-      <button class="btn btn-sm ${usersSubTab === 'trash' ? 'btn-primary' : ''}" onclick="switchUsersTab('trash')">Papelera</button>
     </div>`;
-
-  if (usersSubTab === 'trash') {
-    const trash = await api('/trash');
-    el.innerHTML = tabsHtml + `
-      <div class="card">
-        <div class="card-title">Elementos eliminados (se borran solos a los 30 días)</div>
-        ${tableOrEmpty(trash, ['Tipo', 'Nombre', 'Eliminado', 'Días restantes', ''], (t) => `
-          <tr>
-            <td class="mono">${t.type_label}</td>
-            <td>${t.name}</td>
-            <td class="mono">${fmtDate(t.deleted_at)}</td>
-            <td class="num ${t.days_remaining <= 5 ? 'expense' : ''}">${t.days_remaining}</td>
-            <td>
-              <button class="btn btn-sm btn-primary" onclick="restoreTrashItem('${t.type}', ${t.id})">Restaurar</button>
-              <button class="btn btn-sm btn-danger" onclick="purgeTrashItem('${t.type}', ${t.id}, '${t.name.replace(/'/g, "\\'")}')">Eliminar definitivo</button>
-            </td>
-          </tr>`, 'La papelera está vacía.')}
-      </div>`;
-    return;
-  }
 
   if (usersSubTab === 'log') {
     const params = new URLSearchParams({ page: activityLogPage, limit: 50 });
@@ -3853,6 +3871,26 @@ function switchUsersTab(tab) {
   activityLogPage = 1;
   renderView();
 }
+async function renderTrash() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+  const trash = await api('/trash');
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title">Elementos eliminados (se borran solos a los 30 días)</div>
+      ${tableOrEmpty(trash, ['Tipo', 'Nombre', 'Eliminado', 'Días restantes', ''], (t) => `
+        <tr>
+          <td class="mono">${t.type_label}</td>
+          <td>${t.name}</td>
+          <td class="mono">${fmtDate(t.deleted_at)}</td>
+          <td class="num ${t.days_remaining <= 5 ? 'expense' : ''}">${t.days_remaining}</td>
+          <td>
+            <button class="btn btn-sm btn-primary" onclick="restoreTrashItem('${t.type}', ${t.id})">Restaurar</button>
+            <button class="btn btn-sm btn-danger" onclick="purgeTrashItem('${t.type}', ${t.id}, '${t.name.replace(/'/g, "\\'")}')">Eliminar definitivo</button>
+          </td>
+        </tr>`, 'La papelera está vacía.')}
+    </div>`;
+}
 function activityLogChangePage(page) {
   activityLogPage = page;
   renderView();
@@ -3877,7 +3915,12 @@ async function restoreTrashItem(type, id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 async function purgeTrashItem(type, id, name) {
-  if (!confirm(`¿Eliminar "${name}" definitivamente? Ya no se podrá recuperar.`)) return;
+  const ok = await confirmDangerous(
+    'Eliminar definitivamente',
+    `¿Eliminar <strong>"${name}"</strong> definitivamente?<br>Esta acción no se puede deshacer: ya no va a poder recuperarse.`,
+    'Sí, eliminar definitivamente'
+  );
+  if (!ok) return;
   if (!(await verifyPasswordPrompt('eliminar definitivamente de la papelera'))) return;
   try {
     await api(`/trash/${type}/${id}`, { method: 'DELETE' });

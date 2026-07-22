@@ -490,6 +490,39 @@ table.ledger tr:hover td { background: #FAFAFA; }
 .stock-warning-actions { display: flex; justify-content: center; gap: 10px; }
 .stock-warning-actions #stockWarnContinue { background: #E8A100; border-color: #E8A100; color: #fff; font-weight: 600; }
 .stock-warning-actions #stockWarnContinue:hover { background: #CB8D00; }
+
+.danger-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 10, 0, 0.55);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.danger-confirm-box {
+  background: #FBF3F3;
+  border: 2px solid var(--danger);
+  border-radius: 14px;
+  padding: 28px 30px;
+  max-width: 460px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+.danger-confirm-icon { font-size: 34px; margin-bottom: 8px; }
+.danger-confirm-title { font-size: 17px; font-weight: 700; color: var(--danger); margin-bottom: 10px; }
+.danger-confirm-text { font-size: 13.5px; color: #4A2020; line-height: 1.5; margin-bottom: 20px; }
+.danger-confirm-actions { display: flex; justify-content: center; gap: 10px; }
+.danger-confirm-actions [data-action="continue"]:hover { background: var(--danger-soft); }
+
+.row-flash { animation: rowFlashFade 2.2s ease-out; }
+@keyframes rowFlashFade {
+  0% { background-color: var(--accent-soft); }
+  100% { background-color: transparent; }
+}
+
 .toast {
   background: var(--sidebar);
   color: #fff;
