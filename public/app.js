@@ -698,35 +698,70 @@ async function submitStockAdjust() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// Modal genérico para pedir una cantidad (reemplaza los prompt() nativos del navegador
+// en Stock, para que se vea y se comporte igual que el resto de los modales de la app).
+function promptQuantityModal(title, hintHtml, initialValue, confirmLabel, onConfirm) {
+  window._promptQtyCallback = onConfirm;
+  openModal(`
+    <h2>${title}</h2>
+    ${hintHtml ? `<div class="hint" style="margin-bottom:14px">${hintHtml}</div>` : ''}
+    <div class="field"><label>Cantidad</label><input id="f_prompt_qty" type="number" step="0.001" value="${initialValue ?? ''}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitPromptQuantity()">${confirmLabel || 'Confirmar'}</button>
+    </div>
+  `);
+  document.getElementById('f_prompt_qty')?.focus();
+}
+function submitPromptQuantity() {
+  const input = document.getElementById('f_prompt_qty');
+  const value = input ? input.value : '';
+  const cb = window._promptQtyCallback;
+  closeModal();
+  if (cb) cb(value);
+}
+
 async function quickAddStock(articleId, warehouseId, name, currentQty) {
-  const input = prompt(`Cantidad a agregar de "${name}" (actual: ${fmtQty(currentQty)}):`);
-  if (input === null) return;
-  const qty = Number(input);
-  if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
-  if (!(await verifyPasswordPrompt('agregar unidades de stock'))) return;
-  try {
-    await api('/stock/adjust', {
-      method: 'POST',
-      body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'IN' }),
-    });
-    toast('Unidades agregadas al stock.');
-    renderView();
-  } catch (e) { toast(e.message, 'error'); }
+  promptQuantityModal(
+    'Agregar unidades',
+    `Cantidad a agregar de <strong>"${name}"</strong> (actual: ${fmtQty(currentQty)}).`,
+    '',
+    'Agregar',
+    async (input) => {
+      const qty = Number(input);
+      if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
+      if (!(await verifyPasswordPrompt('agregar unidades de stock'))) return;
+      try {
+        await api('/stock/adjust', {
+          method: 'POST',
+          body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'IN' }),
+        });
+        toast('Unidades agregadas al stock.');
+        renderView();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+  );
 }
 async function quickRemoveStock(articleId, warehouseId, name, currentQty) {
-  const input = prompt(`Cantidad a quitar de "${name}" (disponible: ${fmtQty(currentQty)}):`);
-  if (input === null) return;
-  const qty = Number(input);
-  if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
-  if (!(await verifyPasswordPrompt('quitar unidades de stock'))) return;
-  try {
-    await api('/stock/adjust', {
-      method: 'POST',
-      body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'OUT' }),
-    });
-    toast('Unidades quitadas del stock.');
-    renderView();
-  } catch (e) { toast(e.message, 'error'); }
+  promptQuantityModal(
+    'Quitar unidades',
+    `Cantidad a quitar de <strong>"${name}"</strong> (disponible: ${fmtQty(currentQty)}).`,
+    '',
+    'Quitar',
+    async (input) => {
+      const qty = Number(input);
+      if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
+      if (!(await verifyPasswordPrompt('quitar unidades de stock'))) return;
+      try {
+        await api('/stock/adjust', {
+          method: 'POST',
+          body: JSON.stringify({ article_id: articleId, warehouse_id: warehouseId, quantity: qty, type: 'OUT' }),
+        });
+        toast('Unidades quitadas del stock.');
+        renderView();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+  );
 }
 async function deleteStockRow(stockId, name) {
   if (!confirm(`¿Eliminar por completo el registro de stock de "${name}"? Esto lo saca del listado (equivale a dejarlo en cero).`)) return;
@@ -1178,20 +1213,25 @@ async function showWarehouseDetail(warehouseId, name) {
 }
 
 async function editWarehouseStock(warehouseId, articleId, name, currentQty, warehouseName) {
-  const input = prompt(`Nueva cantidad de "${name}" en "${warehouseName}" (actual: ${fmtQty(currentQty)}):`, currentQty);
-  if (input === null) return;
-  const qty = Number(input);
-  if (isNaN(qty) || qty < 0) { toast('Ingresá un número válido (0 o mayor).', 'error'); return; }
-  if (!(await verifyPasswordPrompt('editar stock manualmente'))) return;
-  try {
-    await api('/stock/set', {
-      method: 'PUT',
-      body: JSON.stringify({ warehouse_id: warehouseId, article_id: articleId, quantity: qty }),
-    });
-    toast('Stock actualizado.');
-    await showWarehouseDetail(warehouseId, warehouseName);
-    renderView();
-  } catch (e) { toast(e.message, 'error'); }
+  promptQuantityModal(
+    'Editar stock',
+    `Nueva cantidad de <strong>"${name}"</strong> en <strong>"${warehouseName}"</strong> (actual: ${fmtQty(currentQty)}).`,
+    currentQty,
+    'Guardar',
+    async (input) => {
+      const qty = Number(input);
+      if (isNaN(qty) || qty < 0) { toast('Ingresá un número válido (0 o mayor).', 'error'); return; }
+      if (!(await verifyPasswordPrompt('editar stock manualmente'))) return;
+      try {
+        await api('/stock/set', {
+          method: 'PUT',
+          body: JSON.stringify({ warehouse_id: warehouseId, article_id: articleId, quantity: qty }),
+        });
+        toast('Stock actualizado.');
+        renderView();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+  );
 }
 function newWarehouseModal() {
   openModal(`
@@ -2062,6 +2102,7 @@ function buildShipmentDocumentHtml({ shipment, customer, business_unit, warehous
 
     <div class="footer-note">${business_unit.name} — You One Racing S.A.S. · Este documento no representa una operación de venta (${reasonLabel}) · Generado el ${fmtDate(new Date().toISOString())}</div>
   </div>
+  <script>window.addEventListener('load', () => { window.print(); });</script>
 </body>
 </html>`;
 }
@@ -2737,6 +2778,7 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
 
     <div class="footer-note">${business_unit.name} — You One Racing S.A.S. · Documento generado el ${fmtDate(new Date().toISOString())}</div>
   </div>
+  <script>window.addEventListener('load', () => { window.print(); });</script>
 </body>
 </html>`;
 }
@@ -2861,14 +2903,39 @@ async function selectQuoteToLoad(quoteId) {
   toast('Presupuesto cargado en la venta. Revisá los datos antes de guardar.');
 }
 
+// Recordar el depósito/caja habitual por unidad de negocio (preferencia de uso local,
+// no es un dato de negocio: se guarda en localStorage, no en la base de datos).
+function getRememberedChoice(kind, buId) {
+  try {
+    const raw = localStorage.getItem(`erp_pref_${kind}_${buId}`);
+    return raw ? Number(raw) : null;
+  } catch (e) { return null; }
+}
+function rememberChoice(kind, buId, id) {
+  if (id == null || id === '') return;
+  try { localStorage.setItem(`erp_pref_${kind}_${buId}`, String(id)); } catch (e) { /* localStorage no disponible, no es crítico */ }
+}
+function reorderWithPreferred(items, preferredId) {
+  if (preferredId == null) return items;
+  const idx = items.findIndex(i => String(i.id) === String(preferredId));
+  if (idx <= 0) return items;
+  const copy = items.slice();
+  const [chosen] = copy.splice(idx, 1);
+  copy.unshift(chosen);
+  return copy;
+}
+
 function newOperationModal(kind) {
   window._stockLookup = null;
   const isPurchase = kind === 'purchase';
   const contactItems = (isPurchase ? state.cache.suppliers : state.cache.customers)
     .map(c => ({ id: c.id, label: c.name }));
-  const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
+  const whItems = reorderWithPreferred(whByBU().map(w => ({ id: w.id, label: w.name })), getRememberedChoice('warehouse', state.selectedBU));
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
-  const cashBoxItems = state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})` }));
+  const cashBoxItems = reorderWithPreferred(
+    state.cache.cashBoxes.map(b => ({ id: b.id, label: `${b.name} (${b.kind === 'SOBRE' ? 'Sobre' : 'Caja'} · ${b.currency})` })),
+    getRememberedChoice('cashbox', state.selectedBU)
+  );
 
   lineItemCount = 0;
   totalManuallyEdited = false;
@@ -2887,7 +2954,7 @@ function newOperationModal(kind) {
       <input type="date" id="f_date" value="${new Date().toISOString().slice(0, 10)}">
     </div>
     <div class="field-row">
-      <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…')}</div>
+      <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…', whItems[0]?.label)}</div>
       <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
     </div>
     <div class="field"><label>Forma de pago</label>
@@ -2899,7 +2966,7 @@ function newOperationModal(kind) {
     </div>
     <div class="field" id="paymentBoxField" style="display:none">
       <label>Caja o sobre de destino</label>
-      ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…')}
+      ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…', cashBoxItems[0]?.label)}
     </div>
     <div class="hint" id="paymentBoxHint" style="margin-top:-10px;margin-bottom:14px">${isPurchase ? 'La caja o sobre de destino se elige después, al procesar el pago de esta compra.' : ''}</div>
 
@@ -3211,6 +3278,8 @@ async function createOperation(kind) {
     closeModal();
     toast(`${isPurchase ? 'Compra' : 'Venta'} creada como pendiente. Confirmala para mover stock y caja.`);
     window._flashKey = created.id;
+    rememberChoice('warehouse', state.selectedBU, payload.warehouse_id);
+    if (!isPurchase && payload.cash_box_id) rememberChoice('cashbox', state.selectedBU, payload.cash_box_id);
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
