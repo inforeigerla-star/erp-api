@@ -83,6 +83,9 @@
     <header class="topbar">
       <img id="topbarWatermark" class="topbar-watermark" alt="">
       <h1 id="viewTitle">Panel</h1>
+      <div class="global-search-wrap" id="globalSearchWrap">
+        <input type="text" id="globalSearchInput" class="global-search-input" placeholder="Buscar venta, compra, cliente, proveedor o artículo…" autocomplete="off" oninput="globalSearchDebounced()" onkeydown="globalSearchKeydown(event)">
+      </div>
       <div class="topbar-actions" id="viewActions"></div>
     </header>
 
@@ -93,6 +96,11 @@
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal" id="modal"></div>
 </div>
+
+<!-- Fuera del topbar a propósito: el topbar tiene overflow:hidden (para recortar
+     el watermark) y eso cortaba este dropdown. Se posiciona con JS (ver
+     runGlobalSearch en app.js) tomando como referencia #globalSearchInput. -->
+<div class="global-search-results" id="globalSearchResults" style="display:none"></div>
 
 <div class="toast-stack" id="toastStack"></div>
 

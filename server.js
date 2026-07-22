@@ -2330,6 +2330,73 @@ app.get('/dashboard/summary', async (req, res) => {
   }
 });
 
+// ---------- BÚSQUEDA GLOBAL (topbar) ----------
+// Solo lectura, sin migración. Busca por N° de operación (venta/compra),
+// nombre/CUIT de cliente o proveedor, o código/descripción de artículo.
+// Devuelve hasta 5 resultados por categoría, con la unidad de negocio de
+// cada resultado para poder cambiar a esa unidad al ir directo al resultado.
+app.get('/search/global', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) {
+      return res.json({ customers: [], suppliers: [], articles: [], sales: [], purchases: [] });
+    }
+    const like = `%${q}%`;
+
+    const [customersR, suppliersR, articlesR, salesR, purchasesR] = await Promise.all([
+      pool.query(
+        `SELECT id, name, tax_id FROM customer
+         WHERE deleted_at IS NULL AND (name ILIKE $1 OR tax_id ILIKE $1)
+         ORDER BY name LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT id, name, tax_id FROM supplier
+         WHERE deleted_at IS NULL AND (name ILIKE $1 OR tax_id ILIKE $1)
+         ORDER BY name LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT a.id, a.code, a.alt_code, a.description, a.business_unit_id, bu.name AS business_unit_name
+         FROM article a JOIN business_unit bu ON bu.id = a.business_unit_id
+         WHERE a.code ILIKE $1 OR a.alt_code ILIKE $1 OR a.description ILIKE $1
+         ORDER BY a.code LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT s.id, s.total_amount, s.status, s.business_unit_id, bu.name AS business_unit_name,
+                c.name AS customer_name
+         FROM sale s
+         JOIN business_unit bu ON bu.id = s.business_unit_id
+         LEFT JOIN customer c ON c.id = s.customer_id
+         WHERE s.deleted_at IS NULL AND CAST(s.id AS TEXT) ILIKE $1
+         ORDER BY s.id DESC LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT p.id, p.total_amount, p.status, p.business_unit_id, bu.name AS business_unit_name,
+                s.name AS supplier_name
+         FROM purchase p
+         JOIN business_unit bu ON bu.id = p.business_unit_id
+         LEFT JOIN supplier s ON s.id = p.supplier_id
+         WHERE p.deleted_at IS NULL AND CAST(p.id AS TEXT) ILIKE $1
+         ORDER BY p.id DESC LIMIT 5`,
+        [like]
+      ),
+    ]);
+
+    res.json({
+      customers: customersR.rows,
+      suppliers: suppliersR.rows,
+      articles: articlesR.rows,
+      sales: salesR.rows,
+      purchases: purchasesR.rows,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- BALANCES ----------
 app.get('/suppliers/:id/balance', async (req, res) => {
   const { id } = req.params;

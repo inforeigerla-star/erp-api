@@ -194,12 +194,12 @@ async function loadBusinessUnits() {
   sel.onchange = () => selectBusinessUnit(Number(sel.value));
   applyBUTheme();
 }
-function selectBusinessUnit(id) {
+function selectBusinessUnit(id, skipRender) {
   state.selectedBU = id;
   const sel = document.getElementById('buSelect');
   if (sel) sel.value = id;
   applyBUTheme();
-  renderView();
+  if (!skipRender) renderView();
 }
 function cycleBusinessUnit(direction) {
   if (!state.businessUnits.length) return;
@@ -288,13 +288,150 @@ const viewTitles = {
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    state.view = btn.dataset.view;
-    renderView();
-  });
+  btn.addEventListener('click', () => goToView(btn.dataset.view));
 });
+
+// Navega a una vista programáticamente (misma lógica que el click de la nav
+// lateral). `afterRender` es opcional: se ejecuta una vez que la vista ya
+// terminó de renderizarse (para abrir un modal de detalle encima, etc).
+// Usado por el buscador global para "ir directo al resultado".
+function goToView(viewName, afterRender) {
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
+  state.view = viewName;
+  const p = renderView();
+  if (afterRender) p.then(afterRender);
+}
+
+// ---------------------------------------------------------
+// Buscador global (topbar): venta/compra por N°, cliente/proveedor por
+// nombre o CUIT, artículo por código/descripción. "Ir directo al resultado"
+// reutiliza los modales/vistas que ya existen (no se crea ningún detalle
+// nuevo) — para Compras, que no tiene modal de Detalle (ver Bloque 4), se
+// navega a la lista y se muestra un resumen en un toast.
+// ---------------------------------------------------------
+let globalSearchTimer = null;
+window._globalSearchData = null;
+
+function globalSearchDebounced() {
+  clearTimeout(globalSearchTimer);
+  const q = document.getElementById('globalSearchInput').value.trim();
+  const resultsEl = document.getElementById('globalSearchResults');
+  if (q.length < 2) {
+    resultsEl.style.display = 'none';
+    resultsEl.innerHTML = '';
+    window._globalSearchData = null;
+    return;
+  }
+  globalSearchTimer = setTimeout(() => runGlobalSearch(q), 300);
+}
+
+const GLOBAL_SEARCH_SECTIONS = [
+  ['sales', 'Ventas', (s) => `<span class="global-search-title">Venta #${s.id}</span><span class="global-search-sub">${s.customer_name || 'Sin cliente'} · $ ${fmtMoney(s.total_amount)} · ${s.business_unit_name}</span>`],
+  ['purchases', 'Compras', (p) => `<span class="global-search-title">Compra #${p.id}</span><span class="global-search-sub">${p.supplier_name || 'Sin proveedor'} · $ ${fmtMoney(p.total_amount)} · ${p.business_unit_name}</span>`],
+  ['customers', 'Clientes', (c) => `<span class="global-search-title">${c.name}</span><span class="global-search-sub">${c.tax_id || 'Sin CUIT'}</span>`],
+  ['suppliers', 'Proveedores', (s) => `<span class="global-search-title">${s.name}</span><span class="global-search-sub">${s.tax_id || 'Sin CUIT'}</span>`],
+  ['articles', 'Artículos', (a) => `<span class="global-search-title">${a.code}${a.alt_code ? ' · ' + a.alt_code : ''}</span><span class="global-search-sub">${a.description} · ${a.business_unit_name}</span>`],
+];
+
+// El dropdown vive fuera del topbar (que tiene overflow:hidden para recortar
+// el watermark), así que se posiciona "a mano" en cada apertura, tomando como
+// referencia dónde está el input de búsqueda en ese momento.
+function positionGlobalSearchResults() {
+  const input = document.getElementById('globalSearchInput');
+  const resultsEl = document.getElementById('globalSearchResults');
+  if (!input || !resultsEl) return;
+  const rect = input.getBoundingClientRect();
+  resultsEl.style.top = `${rect.bottom + 4}px`;
+  resultsEl.style.left = `${rect.left}px`;
+  resultsEl.style.width = `${rect.width}px`;
+}
+
+async function runGlobalSearch(q) {
+  const resultsEl = document.getElementById('globalSearchResults');
+  positionGlobalSearchResults();
+  const data = await api(`/search/global?q=${encodeURIComponent(q)}`).catch(() => null);
+  if (!data) {
+    resultsEl.innerHTML = `<div class="global-search-empty">Error al buscar.</div>`;
+    resultsEl.style.display = 'block';
+    return;
+  }
+  window._globalSearchData = data;
+
+  const sections = GLOBAL_SEARCH_SECTIONS.filter(([kind]) => data[kind]?.length);
+  if (!sections.length) {
+    resultsEl.innerHTML = `<div class="global-search-empty">Sin resultados</div>`;
+  } else {
+    resultsEl.innerHTML = sections.map(([kind, label, fmt]) => `
+      <div class="global-search-group-label">${label}</div>
+      ${data[kind].map((it, idx) => `<div class="global-search-item" onclick="selectGlobalSearchResult('${kind}', ${idx})">${fmt(it)}</div>`).join('')}
+    `).join('');
+  }
+  resultsEl.style.display = 'block';
+}
+
+function selectGlobalSearchResult(kind, idx) {
+  const data = window._globalSearchData;
+  if (!data) return;
+  const item = data[kind][idx];
+  if (!item) return;
+  closeGlobalSearch();
+
+  const switchBUIfNeeded = () => {
+    if (item.business_unit_id != null && item.business_unit_id !== state.selectedBU) {
+      selectBusinessUnit(item.business_unit_id, true);
+    }
+  };
+
+  if (kind === 'customers') {
+    goToView('customers', () => openEditContactModal('customer', item.id));
+  } else if (kind === 'suppliers') {
+    goToView('suppliers', () => openEditContactModal('supplier', item.id));
+  } else if (kind === 'articles') {
+    switchBUIfNeeded();
+    goToView('articles', () => openEditArticleModal(item.id));
+  } else if (kind === 'sales') {
+    switchBUIfNeeded();
+    goToView('sales', () => showSaleDetail(item.id));
+  } else if (kind === 'purchases') {
+    switchBUIfNeeded();
+    goToView('purchases', () => {
+      toast(`Compra #${item.id} · ${item.supplier_name || 'Sin proveedor'} · $ ${fmtMoney(item.total_amount)} · ${statusLabel(item.status)}. Buscala en la lista para gestionarla.`);
+    });
+  }
+}
+
+function closeGlobalSearch() {
+  const resultsEl = document.getElementById('globalSearchResults');
+  if (resultsEl) { resultsEl.style.display = 'none'; resultsEl.innerHTML = ''; }
+  const input = document.getElementById('globalSearchInput');
+  if (input) input.value = '';
+  window._globalSearchData = null;
+}
+
+function globalSearchKeydown(e) {
+  if (e.key === 'Escape') { closeGlobalSearch(); e.target.blur(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+  const resultsEl = document.getElementById('globalSearchResults');
+  if (!resultsEl || resultsEl.style.display === 'none') return;
+  const items = [...resultsEl.querySelectorAll('.global-search-item')];
+  if (!items.length) return;
+  let activeIndex = items.findIndex(it => it.classList.contains('active'));
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    activeIndex = (activeIndex + 1) % items.length;
+    items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    activeIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+    items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const target = activeIndex >= 0 ? items[activeIndex] : items[0];
+    target.click();
+  }
+}
 
 async function renderView() {
   document.getElementById('viewTitle').textContent = viewTitles[state.view];
@@ -509,10 +646,11 @@ async function renderDashboard() {
   `;
 }
 
+const STATUS_LABELS = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', CANCELLED: 'Cancelada', OPEN: 'Abierta', CLOSED: 'Cerrada' };
+function statusLabel(status) { return STATUS_LABELS[status] || status; }
 function statusBadge(status) {
   const map = { PENDING: 'pending', CONFIRMED: 'confirmed', CANCELLED: 'cancelled', OPEN: 'open', CLOSED: 'closed' };
-  const label = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', CANCELLED: 'Cancelada', OPEN: 'Abierta', CLOSED: 'Cerrada' };
-  return `<span class="badge badge-${map[status] || 'pending'}">${label[status] || status}</span>`;
+  return `<span class="badge badge-${map[status] || 'pending'}">${statusLabel(status)}</span>`;
 }
 
 function tableOrEmpty(rows, headers, rowFn, emptyMsg, keyFn) {
@@ -3833,6 +3971,9 @@ function getSearchableValue(baseId) {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.article-search-wrap')) {
     document.querySelectorAll('.article-search-results').forEach(r => r.style.display = 'none');
+  }
+  if (!e.target.closest('.global-search-wrap') && !e.target.closest('.global-search-results')) {
+    closeGlobalSearch();
   }
 });
 
