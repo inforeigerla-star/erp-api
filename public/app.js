@@ -45,7 +45,10 @@ function unformatMoneyField(el) {
   const num = parseMoneyInput(el.value);
   el.value = el.value === '' ? '' : (num === 0 && !el.value.trim() ? '' : String(num));
 }
-function fmtDate(value) {
+// `withTime=false` (etapa de mejora visual): fecha corta sin hora, para
+// listados donde la hora no aporta nada al escanear la tabla. Por defecto
+// sigue devolviendo fecha+hora como siempre, así ningún uso existente cambia.
+function fmtDate(value, { withTime = true } = {}) {
   if (!value) return '-';
   let str = value instanceof Date ? value.toISOString() : String(value);
   if (!/Z$|[+-]\d\d:?\d\d$/.test(str)) str += 'Z'; // forzar UTC si no trae zona horaria
@@ -53,10 +56,11 @@ function fmtDate(value) {
   if (isNaN(d.getTime())) return '-';
   return d.toLocaleString('es-AR', {
     timeZone: 'America/Argentina/Buenos_Aires',
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    day: '2-digit', month: '2-digit', year: withTime ? 'numeric' : '2-digit',
+    ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}),
   });
 }
+function fmtDateShort(value) { return fmtDate(value, { withTime: false }); }
 
 // ---------------------------------------------------------
 // Auth
@@ -241,24 +245,45 @@ async function createBusinessUnit() {
     closeModal();
     toast('Unidad de negocio creada.');
     await loadBusinessUnits();
-    state.selectedBU = bu.id;
-    document.getElementById('buSelect').value = bu.id;
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
-async function deleteCurrentBusinessUnit() {
-  const bu = state.businessUnits.find(b => b.id === state.selectedBU);
-  if (!bu) return;
-  if (!confirm(`¿Eliminar la unidad de negocio "${bu.name}"? Se perderán sus proyectos, artículos y depósitos asociados.`)) return;
-  const typed = prompt(`Para confirmar, escribí exactamente el nombre de la unidad: "${bu.name}"`);
-  if (typed !== bu.name) { toast('El nombre no coincide. No se eliminó nada.', 'error'); return; }
+// Eliminar una unidad de negocio es una acción destructiva e infrecuente:
+// se sacó del selector lateral (donde quedaba pegada a un control de uso diario
+// y se prestaba a error) y ahora vive en Administración > Unidades de negocio.
+// Se le suma la confirmación reforzada (mismo patrón que la purga de papelera:
+// overlay de advertencia + escribir el nombre exacto + verificar contraseña).
+async function deleteBusinessUnitRow(id, name) {
+  const ok = await confirmDangerous(
+    'Eliminar unidad de negocio',
+    `¿Eliminar la unidad de negocio <strong>"${name}"</strong>?<br>Se perderán sus proyectos, artículos y depósitos asociados. Esta acción no se puede deshacer.`,
+    'Sí, eliminar'
+  );
+  if (!ok) return;
+  const typed = prompt(`Para confirmar, escribí exactamente el nombre de la unidad: "${name}"`);
+  if (typed !== name) { toast('El nombre no coincide. No se eliminó nada.', 'error'); return; }
+  if (!(await verifyPasswordPrompt('eliminar una unidad de negocio'))) return;
   try {
-    await api(`/business-units/${bu.id}`, { method: 'DELETE' });
+    await api(`/business-units/${id}`, { method: 'DELETE' });
     toast('Unidad de negocio eliminada.');
     await loadBusinessUnits();
     await loadMasterData();
     renderView();
   } catch (e) { toast(e.message, 'error'); }
+}
+async function renderBusinessUnits() {
+  document.getElementById('viewActions').innerHTML = `<button class="btn btn-primary" onclick="newBusinessUnitModal()">+ Nueva unidad</button>`;
+  const el = document.getElementById('view');
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title">Unidades de negocio</div>
+      <div class="hint" style="margin-bottom:12px">Cada unidad tiene sus propios proyectos, artículos, stock y depósitos. Clientes, proveedores y cajas son compartidos entre todas. Eliminar una unidad es permanente.</div>
+      ${tableOrEmpty(state.businessUnits, ['Nombre', ''], (bu) => `
+        <tr>
+          <td>${bu.name}</td>
+          <td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="deleteBusinessUnitRow(${bu.id}, '${bu.name.replace(/'/g, "\\'")}')">Eliminar</button></td>
+        </tr>`, 'No hay unidades de negocio cargadas.')}
+    </div>`;
 }
 
 async function loadMasterData() {
@@ -284,7 +309,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', trash: 'Papelera', debtors: 'Deudores', reports: 'Reportes',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', 'business-units': 'Unidades de negocio', trash: 'Papelera', debtors: 'Deudores', reports: 'Reportes',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -454,6 +479,7 @@ async function renderView() {
       case 'projects': await renderProjects(); break;
       case 'cash': await renderFinance(); break;
       case 'users': await renderUsers(); break;
+      case 'business-units': await renderBusinessUnits(); break;
       case 'trash': await renderTrash(); break;
       case 'debtors': await renderDebtors(); break;
     }
@@ -734,11 +760,10 @@ async function renderStock() {
           <td>${s.description}</td>
           <td>${s.warehouse_name}</td>
           <td class="num" style="${Number(s.quantity) < 0 ? 'color:#C9820A;font-weight:700' : ''}">${Number(s.quantity) < 0 ? '⚠️ ' : ''}${fmtQty(s.quantity)}</td>
-          <td>
-            <button class="btn btn-sm" onclick="showKardex(${s.article_id}, '${s.description.replace(/'/g, "\\'")}')">Historia</button>
+          <td style="text-align:right;white-space:nowrap">
             <button class="btn btn-sm" onclick="quickAddStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Agregar unidades</button>
             <button class="btn btn-sm btn-danger" onclick="quickRemoveStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Quitar unidades</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteStockRow(${s.id}, '${s.description.replace(/'/g, "\\'")}')">Eliminar registro</button>
+            ${rowActionsMenu(`stock_${s.id}`, stockRowMenuItems(s))}
           </td>
         </tr>`, 'No hay stock cargado en esta unidad todavía. Cargá una compra confirmada para generar stock.')}
       ${total ? paginationControlsHtml('stock', st.page, total, limit) : ''}
@@ -747,6 +772,16 @@ async function renderStock() {
   focusPreservingSearchInput('stockSearchInput');
 }
 function stockChangePage(page) { listState.stock.page = page; renderView(); }
+// "Agregar/Quitar unidades" quedan como botones visibles porque son la
+// acción principal de esta pantalla (ajuste rápido diario). "Historia" y
+// "Eliminar registro" son de uso ocasional, van al "⋮".
+function stockRowMenuItems(s) {
+  const descEsc = s.description.replace(/'/g, "\\'");
+  return [
+    { label: 'Historia', onclick: `showKardex(${s.article_id}, '${descEsc}')` },
+    { label: 'Eliminar registro', onclick: `deleteStockRow(${s.id}, '${descEsc}')`, danger: true },
+  ];
+}
 
 function articleItemsList() {
   return artByBU().map(a => ({ id: a.article_id, label: `${a.code} — ${a.description}` }));
@@ -1819,11 +1854,14 @@ async function renderPurchases() {
         <tr>
           <td class="mono">#${p.id}</td>
           <td>${supplierName(p.supplier_id)}</td>
-          <td class="mono">${fmtDate(p.date)}</td>
+          <td class="mono">${fmtDateShort(p.date)}</td>
           <td>${statusBadge(p.status)}</td>
           <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
           <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
-          <td>${opActions('purchases', p)} ${(p.status === 'CONFIRMED' && (Number(p.total_amount) - Number(p.settled_amount || 0)) > 0.01) ? `<button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${Number(p.total_amount) - Number(p.settled_amount || 0)})">Procesar pago</button>` : ''} <button class="btn btn-sm btn-danger" onclick="deleteOperation('purchases', ${p.id})">Eliminar</button></td>
+          <td style="text-align:right;white-space:nowrap">
+            ${(p.status === 'CONFIRMED' && (Number(p.total_amount) - Number(p.settled_amount || 0)) > 0.01) ? `<button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${Number(p.total_amount) - Number(p.settled_amount || 0)})">Procesar pago</button>` : ''}
+            ${rowActionsMenu(`purchase_${p.id}`, purchaseRowMenuItems(p))}
+          </td>
         </tr>`, 'No hay compras registradas en esta unidad.', (p) => p.id)}
       ${total ? paginationControlsHtml('purchases', purchasesPage, total, limit) : ''}
     </div>`;
@@ -1849,6 +1887,16 @@ function switchPurchasesTab(tab) {
 }
 function supplierName(id) {
   return state.cache.suppliers.find(s => s.id === id)?.name || `Proveedor #${id}`;
+}
+// Mismo criterio que saleRowMenuItems: agrupa lo menos frecuente en el "⋮",
+// deja "Procesar pago" (cuando corresponde) como botón visible porque es la
+// acción más usada acá — Compras no tiene modal de Detalle (ver Bloque 4 de
+// Cobros y pagos, sección 13), así que no hay un botón equivalente a "Detalle".
+function purchaseRowMenuItems(p) {
+  return [
+    ...opActionsItems('purchases', p),
+    { label: 'Eliminar', onclick: `deleteOperation('purchases', ${p.id})`, danger: true },
+  ];
 }
 function paymentStatusBadge(status) {
   const map = { PENDIENTE: 'pending', PARCIAL: 'pending', PAGADO: 'confirmed' };
@@ -1945,7 +1993,7 @@ async function renderQuotes() {
         <tr>
           <td class="mono">#${q.id}</td>
           <td>${customerName(q.customer_id)}</td>
-          <td class="mono">${fmtDate(q.date)}</td>
+          <td class="mono">${fmtDateShort(q.date)}</td>
           <td>${quoteStatusBadge(q.status)}</td>
           <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
           <td>
@@ -2084,15 +2132,11 @@ async function renderShipments() {
         <td>${customerName(s.customer_id)}</td>
         <td>${s.reason === 'REGALO' ? 'Regalo' : 'Préstamo'}</td>
         <td>${whByBU().find(w => w.id === s.warehouse_id)?.name || '-'}</td>
-        <td class="mono">${fmtDate(s.date)}</td>
+        <td class="mono">${fmtDateShort(s.date)}</td>
         <td>${statusBadge(s.status)}</td>
-        <td>
+        <td style="text-align:right;white-space:nowrap">
           <button class="btn btn-sm" onclick="showShipmentDetail(${s.id})">Detalle</button>
-          ${s.status === 'PENDING' ? `<button class="btn btn-sm" onclick="confirmShipment(${s.id})">Confirmar</button>` : ''}
-          ${s.status === 'CONFIRMED' ? `<button class="btn btn-sm btn-danger" onclick="cancelShipment(${s.id})">Cancelar</button>` : ''}
-          <button class="btn btn-sm btn-danger" onclick="deleteShipment(${s.id})">Eliminar</button>
-          <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 8px;vertical-align:middle"></span>
-          <button class="btn btn-sm" onclick="openShipmentDocumentModal(${s.id})">Remito</button>
+          ${rowActionsMenu(`shipment_${s.id}`, shipmentRowMenuItems(s))}
         </td>
       </tr>`, 'No hay remitos de envío cargados en esta unidad.', (s) => s.id)}
       ${total ? paginationControlsHtml('shipments', st.page, total, limit) : ''}
@@ -2100,6 +2144,16 @@ async function renderShipments() {
   focusPreservingSearchInput('shipmentsSearchInput');
 }
 function shipmentsChangePage(page) { listState.shipments.page = page; renderView(); }
+// "Detalle" queda visible (es la puerta de entrada, igual que en Ventas); el
+// resto (Confirmar/Cancelar según estado, Remito, Eliminar) va al "⋮".
+function shipmentRowMenuItems(s) {
+  const items = [];
+  if (s.status === 'PENDING') items.push({ label: 'Confirmar', onclick: `confirmShipment(${s.id})` });
+  if (s.status === 'CONFIRMED') items.push({ label: 'Cancelar', onclick: `cancelShipment(${s.id})`, danger: true });
+  items.push({ label: 'Remito', onclick: `openShipmentDocumentModal(${s.id})` });
+  items.push({ label: 'Eliminar', onclick: `deleteShipment(${s.id})`, danger: true });
+  return items;
+}
 function newShipmentModal() {
   const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
   const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
@@ -2540,23 +2594,23 @@ async function renderSales() {
           ${(salesDateFrom || salesDateTo) ? `<button class="btn btn-sm" onclick="salesClearDateFilter()">Limpiar</button>` : ''}
         </div>
       </div>
-      ${tableOrEmpty(rows, ['#', 'Cliente', 'CUIT', 'Fecha', 'Estado', 'Pago', 'Caja/Sobre', 'Total', '', 'Documentos'], (s) => `
+      ${tableOrEmpty(rows, ['#', 'Cliente', 'Fecha', 'Estado', 'Cobro', 'Total', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
-          <td>${customerName(s.customer_id)}</td>
-          <td class="mono">${customerTaxId(s.customer_id)}</td>
-          <td class="mono">${fmtDate(s.date)}</td>
-          <td>${statusBadge(s.status)}</td>
-          <td>${paymentTypeLabel(s.payment_type)}</td>
-          <td>${saleCashBoxDisplay(s, collectionsBySale[s.id])}</td>
-          <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
           <td>
-            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
-            ${opActions('sales', s)} <button class="btn btn-sm btn-danger" onclick="deleteOperation('sales', ${s.id})">Eliminar</button>
+            <div class="two-line-main">${customerName(s.customer_id)}</div>
+            <div class="two-line-sub mono">${customerTaxId(s.customer_id)}</div>
           </td>
-          <td style="white-space:nowrap">
-            <button class="btn btn-sm" onclick="openComprobanteModal(${s.id})">Comprobante</button>
-            <button class="btn btn-sm" onclick="openRemitoModal(${s.id})">Remito</button>
+          <td class="mono">${fmtDateShort(s.date)}</td>
+          <td>${statusBadge(s.status)}</td>
+          <td>
+            <div class="two-line-main">${paymentTypeLabel(s.payment_type)}</div>
+            <div class="two-line-sub">${saleCashBoxDisplay(s, collectionsBySale[s.id])}</div>
+          </td>
+          <td class="num income">${s.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(s.total_amount)}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <button class="btn btn-sm" onclick="showSaleDetail(${s.id})">Detalle</button>
+            ${rowActionsMenu(`sale_${s.id}`, saleRowMenuItems(s))}
           </td>
         </tr>`, 'No hay ventas registradas en esta unidad.', (s) => s.id)}
       ${total ? paginationControlsHtml('sales', salesPage, total, limit) : ''}
@@ -2572,6 +2626,18 @@ function saleCashBoxDisplay(sale, collections) {
     return box ? `${box.name} <span class="hint">(a procesar)</span>` : '—';
   }
   return '<span style="color:var(--muted)">—</span>';
+}
+// Todo lo que antes eran botones sueltos (opActions + Comprobante + Remito +
+// Eliminar) agrupado para el menú "⋮" de la fila (etapa de mejora visual).
+// "Detalle" queda afuera, como botón siempre visible, por ser la acción más
+// usada y la puerta de entrada al resto de la información de la venta.
+function saleRowMenuItems(s) {
+  return [
+    ...opActionsItems('sales', s),
+    { label: 'Comprobante', onclick: `openComprobanteModal(${s.id})` },
+    { label: 'Remito', onclick: `openRemitoModal(${s.id})` },
+    { label: 'Eliminar', onclick: `deleteOperation('sales', ${s.id})`, danger: true },
+  ];
 }
 function salesChangePage(page) {
   salesPage = page;
@@ -2764,18 +2830,95 @@ async function submitBankConversion(collectionId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function opActions(kind, op) {
+// Lista de acciones según el estado, sin el HTML del botón — la usan tanto
+// opActions() (Compras, sin cambios de layout todavía) como el menú "⋮"
+// compacto de Ventas (etapa de mejora visual), para no repetir la lógica de
+// qué acción corresponde a cada estado en dos lugares distintos.
+function opActionsItems(kind, op) {
   if (op.status === 'PENDING') {
-    return `
-      <button class="btn btn-sm" onclick="confirmOperation('${kind}', ${op.id})">Confirmar</button>
-      <button class="btn btn-sm" onclick="openEditOperationModal('${kind}', ${op.id})">Editar</button>
-      <button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>
-    `;
+    return [
+      { label: 'Confirmar', onclick: `confirmOperation('${kind}', ${op.id})` },
+      { label: 'Editar', onclick: `openEditOperationModal('${kind}', ${op.id})` },
+      { label: 'Cancelar', onclick: `cancelOperation('${kind}', ${op.id})`, danger: true },
+    ];
   }
   if (op.status === 'CONFIRMED') {
-    return `<button class="btn btn-sm btn-danger" onclick="cancelOperation('${kind}', ${op.id})">Cancelar</button>`;
+    return [
+      { label: 'Notas / Proyecto', onclick: `openNotesProjectModal('${kind}', ${op.id})` },
+      { label: 'Cancelar y recrear', onclick: `cancelAndRecreateOperation('${kind}', ${op.id})` },
+      { label: 'Cancelar', onclick: `cancelOperation('${kind}', ${op.id})`, danger: true },
+    ];
   }
-  return '-';
+  if (op.status === 'CANCELLED') {
+    return [{ label: 'Notas / Proyecto', onclick: `openNotesProjectModal('${kind}', ${op.id})` }];
+  }
+  return [];
+}
+// Sin cambios de comportamiento: sigue devolviendo los mismos botones sueltos
+// de siempre (hoy los usa Compras). Ventas ya no la llama — ver rowActionsMenu.
+function opActions(kind, op) {
+  return opActionsItems(kind, op)
+    .map(it => `<button class="btn btn-sm${it.danger ? ' btn-danger' : ''}" onclick="${it.onclick}">${it.label}</button>`)
+    .join(' ');
+}
+
+// Menú "⋮" genérico de acciones por fila (etapa de mejora visual). `items`:
+// [{ label, onclick, danger }]. Reutilizable por cualquier listado, no solo
+// Ventas — pensado para aplicar el mismo criterio al resto del ERP después.
+function rowActionsMenu(rowId, items) {
+  if (!items.length) return '';
+  const menuId = `rowmenu_${rowId}`;
+  return `
+    <div class="row-menu-wrap">
+      <button class="btn btn-sm row-menu-trigger" onclick="toggleRowMenu('${menuId}', event)" aria-label="Más acciones">⋮</button>
+      <div class="row-menu" id="${menuId}">
+        ${items.map(it => `<button class="row-menu-item${it.danger ? ' danger' : ''}" onclick="closeAllRowMenus(); ${it.onclick}">${it.label}</button>`).join('')}
+      </div>
+    </div>`;
+}
+function toggleRowMenu(menuId, event) {
+  event.stopPropagation();
+  const menu = document.getElementById(menuId);
+  const wasOpen = menu.classList.contains('show');
+  closeAllRowMenus();
+  if (!wasOpen) menu.classList.add('show');
+}
+function closeAllRowMenus() {
+  document.querySelectorAll('.row-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+// Bloque 3: Observaciones y Proyecto se pueden editar en cualquier estado
+// (a diferencia del resto de campos, que solo se editan mientras PENDING —
+// ver openEditOperationModal). Reusa /sales|purchases/:id/full (Bloque 2)
+// para precargar en vez de embeber texto libre en el atributo onclick.
+async function openNotesProjectModal(kind, id) {
+  const isPurchase = kind === 'purchases';
+  try {
+    const full = await api(`/${kind}/${id}/full`);
+    const op = isPurchase ? full.purchase : full.sale;
+    const projItemsBase = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
+    const projItems = op.project_id ? reorderWithPreferred(projItemsBase, op.project_id) : projItemsBase;
+    openModal(`
+      <h2>Notas y proyecto — ${isPurchase ? 'Compra' : 'Venta'} #${op.id}</h2>
+      <div class="hint" style="margin-bottom:14px">Estos dos campos se pueden editar en cualquier estado, a diferencia del resto (solo mientras está pendiente). Cambiar el proyecto no reetiqueta retroactivamente los movimientos de stock/caja ya generados con el proyecto anterior.</div>
+      <div class="field"><label>Proyecto</label>${searchableSelectHtml('npProject', projItems, 'Buscar proyecto…', projItems[0]?.label || 'Sin proyecto')}</div>
+      <div class="field"><label>Observaciones</label><textarea id="npNotes" rows="3" style="width:100%">${escAttr(op.notes)}</textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitNotesProject('${kind}', ${op.id})">Guardar</button>
+      </div>
+    `);
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function submitNotesProject(kind, id) {
+  const project_id = getSearchableValue('npProject') ? Number(getSearchableValue('npProject')) : null;
+  const notes = document.getElementById('npNotes').value || null;
+  try {
+    await api(`/${kind}/${id}/notes-project`, { method: 'PUT', body: JSON.stringify({ project_id, notes }) });
+    closeModal();
+    toast('Notas y proyecto actualizados.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
 }
 function openEditDateModal(kind, id, currentDate) {
   openModal(`
@@ -2815,6 +2958,25 @@ async function cancelOperation(kind, id) {
     toast('Operación cancelada.');
     window._flashKey = id;
     renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Bloque 4: para una CONFIRMADA que salió mal, evita cancelar y volver a
+// tipear todo de cero. Trae los datos actuales ANTES de cancelar (para no
+// perderlos), cancela (misma lógica que "Cancelar", revierte stock/caja/
+// cta-cte con trazabilidad vía los triggers de siempre) y abre "Nueva
+// venta/compra" precargada en modo recrear (ver newOperationModal) para
+// corregir lo que hacía falta y guardar como operación nueva.
+async function cancelAndRecreateOperation(kind, id) {
+  const isPurchase = kind === 'purchases';
+  const label = isPurchase ? 'la compra' : 'la venta';
+  if (!confirm(`Esto cancela ${label} #${id} (revierte stock/caja/cta-cte) y abre un formulario nuevo precargado con los mismos datos para corregir y guardar. ¿Confirmás?`)) return;
+  try {
+    const full = await api(`/${kind}/${id}/full`);
+    await api(`/${kind}/${id}/cancel`, { method: 'POST' });
+    toast('Operación cancelada. Revisá los datos y guardá para crear la corregida.');
+    await renderView();
+    newOperationModal(isPurchase ? 'purchase' : 'sale', full, 'recreate');
   } catch (e) { toast(e.message, 'error'); }
 }
 async function deleteOperation(kind, id) {
@@ -3230,10 +3392,17 @@ function reorderWithPreferred(items, preferredId) {
 // con `{ sale|purchase, items, ... }` (misma forma que devuelve
 // GET /sales/:id/full y GET /purchases/:id/full). Sin `existing`, se
 // comporta exactamente igual que antes (alta nueva).
-function newOperationModal(kind, existing) {
+// `mode` (Bloque 4): 'recreate' precarga los mismos datos que 'existing'
+// pero el botón Guardar crea una operación NUEVA (POST) en vez de editar la
+// original (PUT) — se usa después de cancelar una CONFIRMADA que salió mal,
+// para no reescribir todo a mano. Cualquier otro valor (o ausente) es el
+// modo edición normal del Bloque 2.
+function newOperationModal(kind, existing, mode) {
   window._stockLookup = null;
   const isPurchase = kind === 'purchase';
   const op = existing ? (isPurchase ? existing.purchase : existing.sale) : null;
+  const isEdit = !!op && mode !== 'recreate';
+  const isRecreate = !!op && mode === 'recreate';
   const contactItems = reorderWithPreferred(
     (isPurchase ? state.cache.suppliers : state.cache.customers).map(c => ({ id: c.id, label: c.name })),
     op ? (isPurchase ? op.supplier_id : op.customer_id) : null
@@ -3249,7 +3418,10 @@ function newOperationModal(kind, existing) {
   lineItemCount = 0;
   totalManuallyEdited = false;
   openModal(`
-    <h2>${op ? `Editar ${isPurchase ? 'compra' : 'venta'} #${op.id}` : (isPurchase ? 'Nueva compra' : 'Nueva venta')}</h2>
+    <h2>${isEdit ? `Editar ${isPurchase ? 'compra' : 'venta'} #${op.id}`
+      : isRecreate ? `Recrear ${isPurchase ? 'compra' : 'venta'} (a partir de la #${op.id} cancelada)`
+      : (isPurchase ? 'Nueva compra' : 'Nueva venta')}</h2>
+    ${isRecreate ? `<div class="hint" style="margin-bottom:14px">La #${op.id} ya quedó cancelada. Revisá y corregí lo que haga falta antes de guardar — esto va a crear una operación nueva.</div>` : ''}
     <input type="hidden" id="f_quote_id" value="">
     ${!isPurchase && !op ? `
     <div style="margin-bottom:14px">
@@ -3318,7 +3490,7 @@ function newOperationModal(kind, existing) {
       <div class="hint" id="totalHint">Se calcula automáticamente a partir de los artículos. Podés cambiarlo manualmente si necesitás ajustarlo.</div>
     </div>` : ''}
 
-    ${op ? `
+    ${isEdit ? `
     <div style="margin-top:6px">
       <button class="btn btn-sm" onclick="toggleAuditHistory('${isPurchase ? 'purchase' : 'sale'}', ${op.id})">Ver historial de cambios</button>
       <div id="auditHistoryBox" style="display:none;margin-top:10px"></div>
@@ -3326,7 +3498,7 @@ function newOperationModal(kind, existing) {
 
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="${op ? `updateOperation('${kind}', ${op.id})` : `createOperation('${kind}')`}">Guardar</button>
+      <button class="btn btn-primary" onclick="${isEdit ? `updateOperation('${kind}', ${op.id})` : `createOperation('${kind}')`}">Guardar</button>
     </div>
   `);
   togglePaymentBoxField(isPurchase);
@@ -4110,6 +4282,9 @@ document.addEventListener('click', (e) => {
   }
   if (!e.target.closest('.global-search-wrap') && !e.target.closest('.global-search-results')) {
     closeGlobalSearch();
+  }
+  if (!e.target.closest('.row-menu-wrap')) {
+    closeAllRowMenus();
   }
 });
 

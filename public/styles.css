@@ -353,6 +353,46 @@ table.ledger tr:last-child td { border-bottom: none; }
 table.ledger tr:hover td { background: #FAFAFA; }
 .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .num.expense { color: var(--danger); }
+
+/* Celda de dos líneas (etapa de mejora visual): dato principal + secundario
+   apilados en la misma celda, para no gastar una columna entera en un dato
+   que siempre acompaña al de arriba (ej: Cliente+CUIT, Pago+Caja/Sobre). */
+.two-line-main { font-size: 13.5px; color: var(--ink); }
+.two-line-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* Menú "⋮" de acciones por fila: agrupa las acciones menos frecuentes para
+   no competir por espacio con los botones principales de la fila. */
+.row-menu-wrap { position: relative; display: inline-block; }
+.row-menu-trigger { padding: 6px 10px; line-height: 1; }
+.row-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 200px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  z-index: 40;
+  padding: 6px;
+}
+.row-menu.show { display: block; }
+.row-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.row-menu-item:hover { background: var(--accent-soft); }
+.row-menu-item.danger { color: var(--danger); }
+.row-menu-item.danger:hover { background: var(--danger-soft); }
 .mono { font-family: var(--mono); }
 
 .empty-state {

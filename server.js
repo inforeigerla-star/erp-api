@@ -1173,6 +1173,37 @@ app.put('/purchases/:id', async (req, res) => {
   }
 });
 
+// Bloque 3: a diferencia del resto de los campos (solo editables mientras
+// PENDING, ver PUT /purchases/:id de arriba), Observaciones y Proyecto se
+// pueden editar en cualquier estado — no mueven stock/caja/cta-cte, solo
+// reetiquetan la operación hacia adelante (no reescribe movimientos ya
+// generados con el proyecto anterior). Sin restricción de status a propósito.
+app.put('/purchases/:id/notes-project', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { notes, project_id } = req.body;
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT notes, project_id FROM purchase WHERE id=$1 FOR UPDATE', [id]);
+    if (!beforeR.rows[0]) throw new Error('Compra no encontrada.');
+    const updated = await client.query(
+      'UPDATE purchase SET notes=$1, project_id=$2 WHERE id=$3 RETURNING notes, project_id',
+      [notes || null, project_id || null, id]
+    );
+    await logAudit(client, {
+      tableName: 'purchase', recordId: Number(id), action: 'EDIT_NOTES_PROJECT',
+      oldValues: beforeR.rows[0], newValues: updated.rows[0], userId: req.user.id,
+    });
+    await client.query('COMMIT');
+    res.json(updated.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/purchases/:id/cancel', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1541,6 +1572,37 @@ app.put('/sales/:id', async (req, res) => {
 
     await client.query('COMMIT');
     res.json(afterR.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Bloque 3: a diferencia del resto de los campos (solo editables mientras
+// PENDING, ver PUT /sales/:id de arriba), Observaciones y Proyecto se
+// pueden editar en cualquier estado — no mueven stock/caja/cta-cte, solo
+// reetiquetan la operación hacia adelante (no reescribe movimientos ya
+// generados con el proyecto anterior). Sin restricción de status a propósito.
+app.put('/sales/:id/notes-project', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { notes, project_id } = req.body;
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT notes, project_id FROM sale WHERE id=$1 FOR UPDATE', [id]);
+    if (!beforeR.rows[0]) throw new Error('Venta no encontrada.');
+    const updated = await client.query(
+      'UPDATE sale SET notes=$1, project_id=$2 WHERE id=$3 RETURNING notes, project_id',
+      [notes || null, project_id || null, id]
+    );
+    await logAudit(client, {
+      tableName: 'sale', recordId: Number(id), action: 'EDIT_NOTES_PROJECT',
+      oldValues: beforeR.rows[0], newValues: updated.rows[0], userId: req.user.id,
+    });
+    await client.query('COMMIT');
+    res.json(updated.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
