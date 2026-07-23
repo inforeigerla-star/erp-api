@@ -247,13 +247,17 @@ document.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------
 // Conexión
 // ---------------------------------------------------------
-async function checkConnection() {
+// (Rendimiento, jul.2026) Antes esto hacía su propio pedido a /business-units
+// solo para mostrar el punto "Conectado" en el sidebar — un pedido de red
+// entero, duplicado, para un dato que loadBusinessUnits() ya trae un
+// instante después. Ahora no llama a nada: boot() le pasa si la carga
+// inicial (loadBusinessUnits + loadMasterData) salió bien o no.
+function setConnStatus(ok) {
   const statusEl = document.getElementById('connStatus');
-  try {
-    await api('/business-units');
+  if (ok) {
     statusEl.className = 'conn-status ok';
     statusEl.querySelector('.conn-text').textContent = 'Conectado';
-  } catch (e) {
+  } else {
     statusEl.className = 'conn-status err';
     statusEl.querySelector('.conn-text').textContent = 'Sin conexión';
   }
@@ -5410,9 +5414,22 @@ async function boot() {
   document.getElementById('currentUserLabel').textContent = `${state.currentUser.username} (${state.currentUser.role === 'ADMIN' ? 'Admin' : 'Usuario'})`;
   document.getElementById('adminNavGroup').style.display = state.currentUser.role === 'ADMIN' ? 'flex' : 'none';
   applyNavPermissions();
-  await checkConnection();
-  await loadBusinessUnits();
-  await loadMasterData();
+  // (Rendimiento, jul.2026) Antes esto eran 3 pedidos en fila, cada uno
+  // esperando al anterior: primero un ping a /business-units solo para el
+  // punto "Conectado", después /business-units de nuevo (duplicado) para
+  // llenar el selector, y recién ahí arrancaban en paralelo los 6 pedidos de
+  // loadMasterData() (proveedores, clientes, depósitos, artículos, proyectos,
+  // cajas). loadMasterData() no depende de loadBusinessUnits() para nada —
+  // así que ahora corren los dos juntos, y no hay pedido duplicado. Esto solo
+  // corta tiempo de espera; no cambia qué se carga ni el orden en que las
+  // pantallas quedan disponibles (el Panel sigue esperando a que todo esto
+  // termine antes de dibujarse, igual que antes).
+  try {
+    await Promise.all([loadBusinessUnits(), loadMasterData()]);
+    setConnStatus(true);
+  } catch (e) {
+    setConnStatus(false);
+  }
   scheduleSessionExpiryWarning();
   renderView();
 }
