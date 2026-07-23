@@ -85,6 +85,7 @@ const SVG_ICONS = {
   cash: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5.5" width="15" height="9" rx="1.5"/><circle cx="10" cy="10" r="2"/></svg>',
   chart: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 16 7.5 10l3 3L17 5.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   wrench: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.8 3.3a3.3 3.3 0 0 0-4.4 4l-6 6 2 2 6-6a3.3 3.3 0 0 0 4-4.4l-2.2 2.2-1.6-1.6 2.2-2.2Z" stroke-linejoin="round"/></svg>',
+  duplicate: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="9.5" height="9.5" rx="1.3"/><path d="M7 15.5h7a1.5 1.5 0 0 0 1.5-1.5V7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 function svgIcon(name) { return SVG_ICONS[name] || ''; }
 
@@ -94,6 +95,31 @@ function svgIcon(name) { return SVG_ICONS[name] || ''; }
 function getToken() { return sessionStorage.getItem('erp_token'); }
 function setToken(t) { sessionStorage.setItem('erp_token', t); }
 function clearToken() { sessionStorage.removeItem('erp_token'); }
+
+// (Roadmap Etapa 8, hallazgo #34) aviso antes de que expire la sesión (hoy
+// 12hs, ver PROJECT_CONTEXT.md sección 9), para que si alguien está cargando
+// algo largo tenga tiempo de terminar o guardar. Mismo patrón de decodificar
+// el JWT que ya usaba init() más abajo, solo que leyendo "exp" en vez de los
+// datos del usuario.
+let _sessionExpiryWarnTimer = null;
+function getTokenExpiryMs() {
+  try {
+    const token = getToken();
+    if (!token) return null;
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.exp ? payload.exp * 1000 : null;
+  } catch (e) { return null; }
+}
+function scheduleSessionExpiryWarning() {
+  clearTimeout(_sessionExpiryWarnTimer);
+  const expiryMs = getTokenExpiryMs();
+  if (!expiryMs) return;
+  const warnInMs = expiryMs - Date.now() - 5 * 60 * 1000; // 5 minutos antes
+  if (warnInMs <= 0) return; // ya está por vencer o venció, no tiene sentido avisar
+  _sessionExpiryWarnTimer = setTimeout(() => {
+    toast('Tu sesión va a expirar en 5 minutos. Si estás cargando algo largo, terminá o guardá pronto (las ventas/compras nuevas guardan un borrador automático, pero conviene no depender de eso).', 'error');
+  }, warnInMs);
+}
 
 async function doLogin() {
   const username = document.getElementById('loginUser').value;
@@ -190,6 +216,13 @@ function openModal(innerHtml) {
 }
 function closeModal() {
   document.getElementById('modalBackdrop').classList.remove('show');
+  // (Roadmap Etapa 8, hallazgo #34) apaga el autoguardado de borrador de
+  // Ventas/Compras al cerrar cualquier modal — sin esto, el listener de
+  // "input"/"change" quedaba pegado a #modal y podía disparar guardados con
+  // datos de OTRO modal abierto después (ej. Ajustar stock).
+  const modal = document.getElementById('modal');
+  if (modal) { modal.oninput = null; modal.onchange = null; }
+  _draftAutosaveKind = null;
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.getElementById('modalBackdrop').classList.contains('show')) {
@@ -2186,6 +2219,12 @@ function quoteRowMenuItems(q) {
 // usa en newOperationModal (Ventas/Compras).
 function quoteModal(existing) {
   window._stockLookup = null;
+  // Presupuestos reutiliza addLineItem('sale')/addExistingLineItem('sale')
+  // (mismo componente que Ventas/Compras) pero NO participa del autoguardado
+  // de borrador de Etapa 8 — por eso se apaga acá explícitamente, así no
+  // queda un borrador de "venta" con campos de presupuesto por un `kind`
+  // igual ('sale') pero contexto distinto.
+  _draftAutosaveKind = null;
   const isEdit = !!existing;
   const q = existing?.quote;
   const contactItems = reorderWithPreferred(state.cache.customers.map(c => ({ id: c.id, label: c.name })), q?.customer_id || null);
@@ -3648,6 +3687,91 @@ function customerName(id) {
 }
 
 let lineItemCount = 0;
+// (Roadmap Etapa 8, hallazgo #34) estado del formulario de operación abierto
+// ('new' | 'edit' | 'recreate' | null) y a qué `kind` ('sale'/'purchase')
+// pertenece el autoguardado activo en este momento — ver newOperationModal()
+// y quoteModal() para cómo se setean.
+let _currentOpFormMode = null;
+let _draftAutosaveKind = null;
+let _draftSaveTimer = null;
+
+function collectOperationDraft(kind) {
+  const items = [...(document.getElementById('lineItems')?.children || [])].map(row => {
+    const m = row.id.replace('line_', '');
+    return {
+      articleId: document.getElementById(`artid_${m}`)?.value || '',
+      searchText: document.getElementById(`artsearch_${m}`)?.value || '',
+      qty: document.getElementById(`qty_${m}`)?.value || '',
+      price: document.getElementById(`price_${m}`)?.value || '',
+    };
+  }).filter(it => it.articleId);
+  return {
+    savedAt: Date.now(),
+    contact: getSearchableValue('contact'),
+    date: document.getElementById('f_date')?.value || '',
+    warehouse: getSearchableValue('warehouse'),
+    project: getSearchableValue('project'),
+    payment: document.getElementById('f_payment')?.value || '',
+    cashbox: getSearchableValue('cashbox'),
+    currency: document.getElementById('f_sale_currency')?.value || '',
+    iva: document.getElementById('f_sale_iva')?.value || '',
+    discount: document.getElementById('f_discount')?.value || '',
+    notes: document.getElementById('f_notes')?.value || '',
+    items,
+  };
+}
+function scheduleDraftSave(kind) {
+  if (_draftAutosaveKind !== kind) return; // no estamos en una carga nueva de ese tipo (ver quoteModal)
+  clearTimeout(_draftSaveTimer);
+  _draftSaveTimer = setTimeout(() => {
+    try { localStorage.setItem(`erp_draft_${kind}`, JSON.stringify(collectOperationDraft(kind))); } catch (e) { /* localStorage lleno o deshabilitado: sin borrador, sin romper nada */ }
+  }, 800);
+}
+function getOperationDraft(kind) {
+  try {
+    const raw = localStorage.getItem(`erp_draft_${kind}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function clearOperationDraft(kind) {
+  localStorage.removeItem(`erp_draft_${kind}`);
+}
+function minutesSinceLabel(ts) {
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 1) return 'hace instantes';
+  if (mins === 1) return 'hace 1 minuto';
+  if (mins < 60) return `hace ${mins} minutos`;
+  const hs = Math.round(mins / 60);
+  return hs === 1 ? 'hace 1 hora' : `hace ${hs} horas`;
+}
+function applyOperationDraft(kind) {
+  const draft = getOperationDraft(kind);
+  if (!draft) return;
+  if (draft.contact) selectSearchableOption('contact', draft.contact);
+  if (draft.date) { const f = document.getElementById('f_date'); if (f) f.value = draft.date; }
+  if (draft.warehouse) selectSearchableOption('warehouse', draft.warehouse);
+  if (draft.project) selectSearchableOption('project', draft.project);
+  if (draft.payment) {
+    const f = document.getElementById('f_payment');
+    if (f) { f.value = draft.payment; togglePaymentBoxField(kind === 'purchase'); }
+  }
+  if (draft.cashbox) selectSearchableOption('cashbox', draft.cashbox);
+  const currencyField = document.getElementById('f_sale_currency');
+  if (currencyField && draft.currency) currencyField.value = draft.currency;
+  const ivaField = document.getElementById('f_sale_iva');
+  if (ivaField && draft.iva) ivaField.value = draft.iva;
+  const discountField = document.getElementById('f_discount');
+  if (discountField && draft.discount) discountField.value = draft.discount;
+  const notesField = document.getElementById('f_notes');
+  if (notesField && draft.notes) notesField.value = draft.notes;
+  const container = document.getElementById('lineItems');
+  if (container) container.innerHTML = '';
+  const items = (draft.items || []).filter(it => it.articleId);
+  if (items.length) items.forEach(it => addLineItem(kind, it));
+  else addLineItem(kind);
+  toast('Borrador recuperado. Revisá los datos antes de guardar.');
+}
+
 async function openLoadQuoteModal() {
   const all = await api('/quotes');
   const pending = all.filter(q => q.business_unit_id === state.selectedBU && q.status === 'PENDING');
@@ -3759,85 +3883,97 @@ function newOperationModal(kind, existing, mode) {
   );
 
   lineItemCount = 0;
-  totalManuallyEdited = false;
+  // (Roadmap Etapa 8) modo actual del formulario, para que las funciones
+  // compartidas (addLineItem, autoguardado de borrador) sepan si conviene
+  // guardar un borrador o no — solo tiene sentido en carga nueva.
+  _currentOpFormMode = isEdit ? 'edit' : isRecreate ? 'recreate' : 'new';
+  _draftAutosaveKind = _currentOpFormMode === 'new' ? kind : null;
+  const draft = _currentOpFormMode === 'new' ? getOperationDraft(kind) : null;
   openModal(`
     <h2>${isEdit ? `Editar ${isPurchase ? 'compra' : 'venta'} #${op.id}`
       : isRecreate ? `Recrear ${isPurchase ? 'compra' : 'venta'} (a partir de la #${op.id} cancelada)`
       : (isPurchase ? 'Nueva compra' : 'Nueva venta')}</h2>
     ${isRecreate ? `<div class="hint" style="margin-bottom:14px">La #${op.id} ya quedó cancelada. Revisá y corregí lo que haga falta antes de guardar — esto va a crear una operación nueva.</div>` : ''}
-    <input type="hidden" id="f_quote_id" value="">
-    ${!isPurchase && !op ? `
-    <div style="margin-bottom:14px">
-      <button class="btn btn-sm" onclick="openLoadQuoteModal()">Cargar desde presupuesto</button>
-      <span class="hint" id="loadedQuoteLabel"></span>
+    ${draft ? `
+    <div class="draft-banner">
+      Hay un borrador sin guardar de ${isPurchase ? 'una compra' : 'una venta'} nueva (${minutesSinceLabel(draft.savedAt)}).
+      <button class="btn btn-sm" onclick="applyOperationDraft('${kind}')">Recuperar</button>
+      <button class="btn btn-sm" onclick="clearOperationDraft('${kind}'); toast('Borrador descartado.'); newOperationModal('${kind}')">Descartar</button>
     </div>` : ''}
-    <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
-      ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`, contactItems[0]?.label)}
-    </div>
-    <div class="field"><label>Fecha</label>
-      <input type="date" id="f_date" value="${op ? String(op.date).slice(0, 10) : new Date().toISOString().slice(0, 10)}">
-    </div>
-    <div class="field-row">
-      <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…', whItems[0]?.label)}</div>
-      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', projItems[0]?.label || 'Sin proyecto')}</div>
-    </div>
-    <div class="field"><label>Forma de pago</label>
-      <select id="f_payment" onchange="togglePaymentBoxField(${isPurchase})">
-        <option value="CASH" ${!op || op.payment_type === 'CASH' ? 'selected' : ''}>Contado</option>
-        <option value="ACCOUNT" ${op && op.payment_type === 'ACCOUNT' ? 'selected' : ''}>Cuenta corriente</option>
-        ${!isPurchase ? `<option value="UNCOLLECTED" ${op && op.payment_type === 'UNCOLLECTED' ? 'selected' : ''}>Factura sin cobrar (procesar después)</option>` : ''}
-      </select>
-    </div>
-    <div class="field" id="paymentBoxField" style="display:none">
-      <label>Caja o sobre de destino</label>
-      ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…', cashBoxItems[0]?.label)}
-    </div>
-    <div class="hint" id="paymentBoxHint" style="margin-top:-10px;margin-bottom:14px">${isPurchase ? 'La caja o sobre de destino se elige después, al procesar el pago de esta compra.' : ''}</div>
+    <input type="hidden" id="f_quote_id" value="">
 
-    <div class="field"><label>Artículos</label>
+    <div class="form-section">
+      <div class="form-section-title">Datos generales</div>
+      ${!isPurchase && !op ? `
+      <div style="margin-bottom:14px">
+        <button class="btn btn-sm" onclick="openLoadQuoteModal()">Cargar desde presupuesto</button>
+        <span class="hint" id="loadedQuoteLabel"></span>
+      </div>` : ''}
+      <div class="field"><label>${isPurchase ? 'Proveedor' : 'Cliente'}</label>
+        ${searchableSelectHtml('contact', contactItems, `Buscar ${isPurchase ? 'proveedor' : 'cliente'}…`, contactItems[0]?.label)}
+      </div>
+      <div class="field"><label>Fecha</label>
+        <input type="date" id="f_date" value="${op ? String(op.date).slice(0, 10) : new Date().toISOString().slice(0, 10)}">
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Depósito</label>${searchableSelectHtml('warehouse', whItems, 'Buscar depósito…', whItems[0]?.label)}</div>
+        <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('project', projItems, 'Buscar proyecto…', projItems[0]?.label || 'Sin proyecto')}</div>
+      </div>
+      <div class="field"><label>Forma de pago</label>
+        <select id="f_payment" onchange="togglePaymentBoxField(${isPurchase})">
+          <option value="CASH" ${!op || op.payment_type === 'CASH' ? 'selected' : ''}>Contado</option>
+          <option value="ACCOUNT" ${op && op.payment_type === 'ACCOUNT' ? 'selected' : ''}>Cuenta corriente</option>
+          ${!isPurchase ? `<option value="UNCOLLECTED" ${op && op.payment_type === 'UNCOLLECTED' ? 'selected' : ''}>Factura sin cobrar (procesar después)</option>` : ''}
+        </select>
+      </div>
+      <div class="field" id="paymentBoxField" style="display:none">
+        <label>Caja o sobre de destino</label>
+        ${searchableSelectHtml('cashbox', cashBoxItems, 'Buscar caja o sobre…', cashBoxItems[0]?.label)}
+      </div>
+      <div class="hint" id="paymentBoxHint" style="margin-top:-10px">${isPurchase ? 'La caja o sobre de destino se elige después, al procesar el pago de esta compra.' : ''}</div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Artículos</div>
       <div class="line-items" id="lineItems"></div>
       <button class="btn btn-sm" onclick="addLineItem('${kind}')">+ Agregar artículo</button>
     </div>
 
-    ${!isPurchase ? `
-    <div class="field-row">
-      <div class="field"><label>Moneda de la venta</label>
-        <select id="f_sale_currency" onchange="refreshAllLinePrices()">
-          <option value="ARS" ${!op || op.currency === 'ARS' ? 'selected' : ''}>Pesos argentinos (ARS)</option>
-          <option value="USD" ${op && op.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
-        </select>
+    <div class="form-section">
+      <div class="form-section-title">Totales y notas</div>
+      ${!isPurchase ? `
+      <div class="field-row">
+        <div class="field"><label>Moneda de la venta</label>
+          <select id="f_sale_currency" onchange="refreshAllLinePrices()">
+            <option value="ARS" ${!op || op.currency === 'ARS' ? 'selected' : ''}>Pesos argentinos (ARS)</option>
+            <option value="USD" ${op && op.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
+          </select>
+        </div>
+        <div class="field"><label>Precios</label>
+          <select id="f_sale_iva" onchange="refreshAllLinePrices()">
+            <option value="no">Sin IVA</option>
+            <option value="si">Con IVA</option>
+          </select>
+        </div>
+      </div>` : ''}
+
+      <div class="field">
+        <label>Descuento (opcional)</label>
+        <input id="f_discount" type="text" inputmode="decimal" placeholder="0" value="${op && Number(op.discount_amount) ? formatMoneyFieldValue(op.discount_amount) : ''}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
+        <div class="hint">Se resta del total calculado a partir de los artículos. Si supera la suma de líneas, el total queda en $0.</div>
       </div>
-      <div class="field"><label>Precios</label>
-        <select id="f_sale_iva" onchange="refreshAllLinePrices()">
-          <option value="no">Sin IVA</option>
-          <option value="si">Con IVA</option>
-        </select>
+
+      <div class="field">
+        <label>Observaciones (opcional)</label>
+        <textarea id="f_notes" rows="2" style="width:100%">${op ? escAttr(op.notes) : ''}</textarea>
       </div>
-    </div>` : ''}
 
-    <div class="field">
-      <label>Descuento (opcional)</label>
-      <input id="f_discount" type="text" inputmode="decimal" placeholder="0" value="${op && Number(op.discount_amount) ? formatMoneyFieldValue(op.discount_amount) : ''}" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
-      <div class="hint">Se resta del total calculado a partir de los artículos. Si supera la suma de líneas, el total queda en $0.</div>
+      ${isEdit ? `
+      <div style="margin-top:6px">
+        <button class="btn btn-sm" onclick="toggleAuditHistory('${isPurchase ? 'purchase' : 'sale'}', ${op.id})">Ver historial de cambios</button>
+        <div id="auditHistoryBox" style="display:none;margin-top:10px"></div>
+      </div>` : ''}
     </div>
-
-    <div class="field">
-      <label>Observaciones (opcional)</label>
-      <textarea id="f_notes" rows="2" style="width:100%">${op ? escAttr(op.notes) : ''}</textarea>
-    </div>
-
-    ${!isPurchase && !op ? `
-    <div class="field">
-      <label>Importe final (editable)</label>
-      <input id="f_total_override" type="text" inputmode="decimal" placeholder="Se calcula solo, pero podés modificarlo" oninput="markTotalAsManual()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this)">
-      <div class="hint" id="totalHint">Se calcula automáticamente a partir de los artículos. Podés cambiarlo manualmente si necesitás ajustarlo.</div>
-    </div>` : ''}
-
-    ${isEdit ? `
-    <div style="margin-top:6px">
-      <button class="btn btn-sm" onclick="toggleAuditHistory('${isPurchase ? 'purchase' : 'sale'}', ${op.id})">Ver historial de cambios</button>
-      <div id="auditHistoryBox" style="display:none;margin-top:10px"></div>
-    </div>` : ''}
 
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -3850,24 +3986,23 @@ function newOperationModal(kind, existing, mode) {
   } else {
     addLineItem(kind);
   }
-}
-let totalManuallyEdited = false;
-function markTotalAsManual() {
-  totalManuallyEdited = true;
-  document.getElementById('totalHint').textContent = 'Importe modificado manualmente. No se recalculará solo.';
+  // (Roadmap Etapa 8, hallazgo #34) autoguardado de borrador: solo para carga
+  // nueva (no edición/recreación, para no confundir un borrador viejo con una
+  // operación real ya guardada). 'input'/'change' burbujean hasta el modal.
+  if (_currentOpFormMode === 'new') {
+    document.getElementById('modal').oninput = () => scheduleDraftSave(kind);
+    document.getElementById('modal').onchange = () => scheduleDraftSave(kind);
+  } else {
+    document.getElementById('modal').oninput = null;
+    document.getElementById('modal').onchange = null;
+  }
 }
 function recalcLineItemsTotal() {
-  if (totalManuallyEdited) return;
-  const rows = [...document.getElementById('lineItems').children];
-  let total = 0;
-  rows.forEach(row => {
-    const idMatch = row.id.replace('line_', '');
-    const qty = Number(document.getElementById(`qty_${idMatch}`)?.value) || 0;
-    const price = parseMoneyInput(document.getElementById(`price_${idMatch}`)?.value);
-    total += qty * price;
-  });
-  const overrideField = document.getElementById('f_total_override');
-  if (overrideField) overrideField.value = formatMoneyFieldValue(total);
+  // (Roadmap Etapa 8, hallazgo #15) esta función quedó sin efecto visible a
+  // propósito: antes sincronizaba el campo "Importe final (editable)", que se
+  // sacó del formulario (ver PROJECT_CONTEXT.md, Etapa 8). Se deja vacía en
+  // vez de desenganchar los ~10 call sites que la llaman, para no arriesgar
+  // esos puntos por un cambio puramente cosmético.
 }
 
 function togglePaymentBoxField(isPurchase) {
@@ -3886,33 +4021,49 @@ function togglePaymentBoxField(isPurchase) {
   }
 }
 
-function addLineItem(kind) {
+// (Roadmap Etapa 8, hallazgo #14) `prefill` opcional ({articleId, searchText,
+// qty, price}) para que "Duplicar línea" (duplicateLineItem) reutilice esta
+// misma función en vez de repetir el armado de la fila.
+function addLineItem(kind, prefill) {
   const isPurchase = kind === 'purchase';
   const id = lineItemCount++;
   const container = document.getElementById('lineItems');
   const row = document.createElement('div');
-  row.className = 'line-item-row';
+  row.className = 'line-item-row line-item-row-op';
   row.id = `line_${id}`;
   row.innerHTML = `
     <div class="article-search-wrap">
       <input type="text" class="article-search-input" id="artsearch_${id}" placeholder="Buscar por código, código alt. o nombre…"
+             value="${prefill ? escAttr(prefill.searchText) : ''}"
              autocomplete="off" oninput="filterArticleOptions(${id}, ${isPurchase})" onfocus="filterArticleOptions(${id}, ${isPurchase})" onkeydown="articleSearchKeydown(event, ${id})">
-      <input type="hidden" id="artid_${id}">
+      <input type="hidden" id="artid_${id}" value="${prefill ? prefill.articleId : ''}">
       <div class="article-search-results" id="artresults_${id}"></div>
     </div>
-    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="1" oninput="recalcLineItemsTotal()" ${!isPurchase ? `onchange="checkLineStock(${id})"` : ''}>
-    <input type="text" inputmode="decimal" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
-    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
+    <input type="number" step="0.001" placeholder="Cant." id="qty_${id}" value="${prefill ? escAttr(prefill.qty) : '1'}" oninput="recalcLineItemsTotal()" ${!isPurchase ? `onchange="checkLineStock(${id})"` : ''}>
+    <input type="text" inputmode="decimal" placeholder="${isPurchase ? 'Costo' : 'Precio'}" id="price_${id}" value="${prefill ? escAttr(prefill.price) : ''}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
+    <button type="button" class="btn-line-icon" title="Duplicar línea" onclick="duplicateLineItem('${kind}', ${id})">${svgIcon('duplicate')}</button>
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal(); scheduleDraftSave('${kind}');">×</button>
   `;
   container.appendChild(row);
   recalcLineItemsTotal();
-  document.getElementById(`artsearch_${id}`)?.focus();
+  if (!prefill) document.getElementById(`artsearch_${id}`)?.focus();
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest(`#line_${id}`)) {
       const r = document.getElementById(`artresults_${id}`);
       if (r) r.style.display = 'none';
     }
+  });
+  scheduleDraftSave(kind);
+}
+function duplicateLineItem(kind, id) {
+  const articleId = document.getElementById(`artid_${id}`)?.value;
+  if (!articleId) { toast('Elegí un artículo en esa línea antes de duplicarla.', 'error'); return; }
+  addLineItem(kind, {
+    articleId,
+    searchText: document.getElementById(`artsearch_${id}`)?.value || '',
+    qty: document.getElementById(`qty_${id}`)?.value || '1',
+    price: document.getElementById(`price_${id}`)?.value || '',
   });
 }
 
@@ -3924,7 +4075,7 @@ function addExistingLineItem(kind, item) {
   const id = lineItemCount++;
   const container = document.getElementById('lineItems');
   const row = document.createElement('div');
-  row.className = 'line-item-row';
+  row.className = 'line-item-row line-item-row-op';
   row.id = `line_${id}`;
   row.dataset.articleId = item.article_id;
   const price = isPurchase ? item.unit_cost : item.unit_price;
@@ -3935,7 +4086,8 @@ function addExistingLineItem(kind, item) {
     </div>
     <input type="number" step="0.001" id="qty_${id}" value="${item.quantity}" oninput="recalcLineItemsTotal()">
     <input type="text" inputmode="decimal" id="price_${id}" value="${formatMoneyFieldValue(price)}" oninput="recalcLineItemsTotal()" onfocus="unformatMoneyField(this)" onblur="formatMoneyField(this); recalcLineItemsTotal();">
-    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal();">×</button>
+    <button type="button" class="btn-line-icon" title="Duplicar línea" onclick="duplicateLineItem('${kind}', ${id})">${svgIcon('duplicate')}</button>
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove(); recalcLineItemsTotal(); scheduleDraftSave('${kind}');">×</button>
   `;
   container.appendChild(row);
 }
@@ -4141,8 +4293,6 @@ function buildOperationPayload(kind) {
   payload[isPurchase ? 'supplier_id' : 'customer_id'] = Number(getSearchableValue('contact'));
   if (!isPurchase) {
     payload.currency = document.getElementById('f_sale_currency').value;
-    const overrideField = document.getElementById('f_total_override');
-    if (overrideField && overrideField.value !== '') payload.total_override = parseMoneyInput(overrideField.value);
     const quoteIdVal = document.getElementById('f_quote_id')?.value;
     if (quoteIdVal) payload.quote_id = Number(quoteIdVal);
   }
@@ -4156,6 +4306,7 @@ async function createOperation(kind) {
 
   try {
     const created = await api(`/${isPurchase ? 'purchases' : 'sales'}`, { method: 'POST', body: JSON.stringify(payload) });
+    clearOperationDraft(kind);
     closeModal();
     toast(`${isPurchase ? 'Compra' : 'Venta'} creada como pendiente. Confirmala para mover stock y caja.`);
     window._flashKey = created.id;
@@ -5142,6 +5293,7 @@ async function boot() {
   await checkConnection();
   await loadBusinessUnits();
   await loadMasterData();
+  scheduleSessionExpiryWarning();
   renderView();
 }
 

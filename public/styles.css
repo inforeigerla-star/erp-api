@@ -507,6 +507,11 @@ table.ledger tr:hover td { background: #FAFAFA; }
   align-items: center;
 }
 .line-item-row:last-child { border-bottom: none; }
+/* (Roadmap Etapa 8, hallazgo #14) modificador propio en vez de agregar una
+   columna a .line-item-row: esa clase la reutilizan también las filas de
+   "Procesar cobro/pago" y "Conversión bancaria" (4 celdas sin botón
+   Duplicar) — cambiar el grid base les habría corrido el ancho del botón ×. */
+.line-item-row-op { grid-template-columns: 2fr 90px 120px 28px 32px; }
 .line-item-row select, .line-item-row input {
   padding: 7px 8px;
   border: 1px solid var(--border);
@@ -514,6 +519,20 @@ table.ledger tr:hover td { background: #FAFAFA; }
   font-size: 13px;
 }
 .remove-line { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 17px; }
+.btn-line-icon { background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; display: inline-flex; align-items: center; }
+.btn-line-icon:hover { color: var(--ink); }
+
+/* (Roadmap Etapa 8) formulario de Nueva venta/compra dividido en secciones
+   livianas, mismo contenido, sin sacar ni mover ningún campo. */
+.form-section { margin-bottom: 18px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.form-section:first-of-type { padding-top: 0; border-top: none; }
+.form-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-bottom: 12px; }
+
+.draft-banner {
+  background: #EDF3FF; border: 1px solid #C7D9F5; border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 14px; font-size: 13px; color: #1F3A63;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
 
 .article-search-wrap { position: relative; }
 .article-search-input {

@@ -1112,16 +1112,18 @@ app.delete('/cash-movements/:id', async (req, res) => {
 app.post('/purchases', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, items, date } = req.body;
+    const { business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, items, date, notes, discount_amount } = req.body;
     await client.query('BEGIN');
 
     // Fecha editable: si no viene del formulario, se usa hoy (mismo comportamiento que antes).
     const dateValue = date || new Date().toISOString().slice(0, 10);
 
+    // (Roadmap Etapa 8) mismo bug que en POST /sales: notes/discount_amount
+    // no se guardaban al crear la compra, solo al editarla. Corregido acá también.
     const purchaseR = await client.query(
-      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [business_unit_id, supplier_id, warehouse_id, project_id || null, cash_box_id || null, payment_type, dateValue]
+      `INSERT INTO purchase (business_unit_id, supplier_id, warehouse_id, project_id, cash_box_id, payment_type, date, notes, discount_amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [business_unit_id, supplier_id, warehouse_id, project_id || null, cash_box_id || null, payment_type, dateValue, notes || null, discount_amount || 0]
     );
     const purchase = purchaseR.rows[0];
 
@@ -1532,16 +1534,23 @@ app.delete('/purchases/:id', async (req, res) => {
 app.post('/sales', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, total_override, quote_id, items, date } = req.body;
+    const { business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id, items, date, notes, discount_amount } = req.body;
     await client.query('BEGIN');
 
     // Fecha editable: si no viene del formulario, se usa hoy (mismo comportamiento que antes).
     const dateValue = date || new Date().toISOString().slice(0, 10);
 
+    // (Roadmap Etapa 8) notes/discount_amount se sumaron al formulario de alta
+    // en el Bloque 2 de "Edición de Compras y Ventas" (PROJECT_CONTEXT.md,
+    // sección 15), pero esa vez solo se cablearon en PUT /sales/:id — acá en
+    // el alta (POST) nunca se guardaban: lo que el usuario tipeaba en
+    // Descuento/Observaciones al crear una venta nueva se perdía en silencio
+    // (quedaba en NULL/0 hasta que alguien editara la venta). Se corrige de
+    // paso, detectado al tocar este mismo endpoint para el hallazgo #15.
     const saleR = await client.query(
-      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id, date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS', quote_id || null, dateValue]
+      `INSERT INTO sale (business_unit_id, customer_id, warehouse_id, project_id, cash_box_id, payment_type, currency, quote_id, date, notes, discount_amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [business_unit_id, customer_id, warehouse_id, project_id || null, cash_box_id || null, payment_type || 'CASH', currency || 'ARS', quote_id || null, dateValue, notes || null, discount_amount || 0]
     );
     const sale = saleR.rows[0];
 
@@ -1551,10 +1560,6 @@ app.post('/sales', async (req, res) => {
          VALUES ($1,$2,$3,$4)`,
         [sale.id, item.article_id, item.quantity, item.unit_price]
       );
-    }
-
-    if (total_override != null && total_override !== '') {
-      await client.query('UPDATE sale SET total_amount=$1 WHERE id=$2', [Number(total_override), sale.id]);
     }
 
     if (quote_id) {
