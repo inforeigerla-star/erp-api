@@ -1431,42 +1431,93 @@ app.post('/purchase-payments/:id/reject', async (req, res) => {
   }
 });
 
+// (Roadmap Etapa 9) extraído de GET /reports/pnl para que también lo use el
+// Panel (hallazgo #10, mismo período/comparación que Reportes) y la
+// exportación a Excel (hallazgo #27) sin repetir las 3 consultas.
+async function computePnl(businessUnitId, dateFrom, dateTo) {
+  const salesR = await pool.query(
+    `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
+     FROM sale WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
+    [businessUnitId, dateFrom, dateTo]
+  );
+  const purchasesR = await pool.query(
+    `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
+     FROM purchase WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
+    [businessUnitId, dateFrom, dateTo]
+  );
+  const manualR = await pool.query(
+    `SELECT
+       COALESCE(SUM(amount) FILTER (WHERE type='INCOME'), 0) AS manual_income,
+       COALESCE(SUM(amount) FILTER (WHERE type='EXPENSE'), 0) AS manual_expense
+     FROM cash_movement
+     WHERE origin_type='MANUAL' AND created_at >= $1 AND created_at < ($2::date + interval '1 day')`,
+    [dateFrom, dateTo]
+  );
+  const sales_total = Number(salesR.rows[0].total);
+  const purchases_total = Number(purchasesR.rows[0].total);
+  const manual_income = Number(manualR.rows[0].manual_income);
+  const manual_expense = Number(manualR.rows[0].manual_expense);
+  return {
+    sales_total, sales_count: Number(salesR.rows[0].count),
+    purchases_total, purchases_count: Number(purchasesR.rows[0].count),
+    manual_income, manual_expense,
+    net_result: sales_total - purchases_total + manual_income - manual_expense,
+  };
+}
+// Período inmediatamente anterior, de igual duración — misma cuenta que ya
+// hacía el frontend en Reportes (renderReports), ahora también reutilizada
+// acá para que el Panel y la exportación calculen la comparación igual.
+function previousPeriod(dateFrom, dateTo) {
+  const from = new Date(dateFrom);
+  const to = new Date(dateTo);
+  const durationMs = to.getTime() - from.getTime();
+  const prevTo = new Date(from.getTime() - 24 * 60 * 60 * 1000);
+  const prevFrom = new Date(prevTo.getTime() - durationMs);
+  return { from: prevFrom.toISOString().slice(0, 10), to: prevTo.toISOString().slice(0, 10) };
+}
+
 app.get('/reports/pnl', async (req, res) => {
   try {
     const { business_unit_id, date_from, date_to } = req.query;
     if (!business_unit_id || !date_from || !date_to) throw new Error('Faltan parámetros: business_unit_id, date_from, date_to.');
+    const pnl = await computePnl(business_unit_id, date_from, date_to);
+    res.json({ business_unit_id: Number(business_unit_id), date_from, date_to, ...pnl });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
-    const salesR = await pool.query(
-      `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
-       FROM sale WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
-      [business_unit_id, date_from, date_to]
-    );
-    const purchasesR = await pool.query(
-      `SELECT COALESCE(SUM(total_amount),0) AS total, COUNT(*) AS count
-       FROM purchase WHERE business_unit_id=$1 AND status='CONFIRMED' AND date >= $2 AND date < ($3::date + interval '1 day')`,
-      [business_unit_id, date_from, date_to]
-    );
-    const manualR = await pool.query(
-      `SELECT
-         COALESCE(SUM(amount) FILTER (WHERE type='INCOME'), 0) AS manual_income,
-         COALESCE(SUM(amount) FILTER (WHERE type='EXPENSE'), 0) AS manual_expense
-       FROM cash_movement
-       WHERE origin_type='MANUAL' AND created_at >= $1 AND created_at < ($2::date + interval '1 day')`,
-      [date_from, date_to]
-    );
+// (Roadmap Etapa 9, hallazgo #27) exportar el Estado de resultados a Excel,
+// mismo patrón que ya usaba /cash-movements/export-manual (XLSX, sección
+// "MOVIMIENTOS DE CAJA" del archivo).
+app.get('/reports/pnl/export', async (req, res) => {
+  try {
+    const { business_unit_id, date_from, date_to } = req.query;
+    if (!business_unit_id || !date_from || !date_to) throw new Error('Faltan parámetros: business_unit_id, date_from, date_to.');
+    const prev = previousPeriod(date_from, date_to);
+    const [current, previous, buR] = await Promise.all([
+      computePnl(business_unit_id, date_from, date_to),
+      computePnl(business_unit_id, prev.from, prev.to),
+      pool.query('SELECT name FROM business_unit WHERE id=$1', [business_unit_id]),
+    ]);
+    const buName = buR.rows[0]?.name || '';
 
-    const sales_total = Number(salesR.rows[0].total);
-    const purchases_total = Number(purchasesR.rows[0].total);
-    const manual_income = Number(manualR.rows[0].manual_income);
-    const manual_expense = Number(manualR.rows[0].manual_expense);
-    const net_result = sales_total - purchases_total + manual_income - manual_expense;
-
-    res.json({
-      business_unit_id: Number(business_unit_id), date_from, date_to,
-      sales_total, sales_count: Number(salesR.rows[0].count),
-      purchases_total, purchases_count: Number(purchasesR.rows[0].count),
-      manual_income, manual_expense, net_result,
-    });
+    const rows = [
+      { Concepto: 'Ventas', 'Período actual': current.sales_total, 'Período anterior': previous.sales_total },
+      { Concepto: 'Compras (costo)', 'Período actual': current.purchases_total, 'Período anterior': previous.purchases_total },
+      { Concepto: 'Otros ingresos', 'Período actual': current.manual_income, 'Período anterior': previous.manual_income },
+      { Concepto: 'Gastos operativos', 'Período actual': current.manual_expense, 'Período anterior': previous.manual_expense },
+      { Concepto: 'Resultado neto', 'Período actual': current.net_result, 'Período anterior': previous.net_result },
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 22 }, { wch: 16 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Estado de resultados');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `estado_resultados_${buName.replace(/\s+/g, '_')}_${date_from}_${date_to}.xlsx`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

@@ -609,9 +609,46 @@ function getMonthRange(offsetMonths) {
   const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0);
   return { from: fmtDateInput(start), to: fmtDateInput(end) };
 }
+// Período inmediatamente anterior, de igual duración — mismo cálculo que ya
+// hacía renderReports() de forma local; se extrajo acá (Roadmap Etapa 9) para
+// que el Panel también lo use sin repetirlo.
+function previousPeriodRange(dateFrom, dateTo) {
+  const from = new Date(dateFrom);
+  const to = new Date(dateTo);
+  const durationMs = to.getTime() - from.getTime();
+  const prevTo = new Date(from.getTime() - 24 * 60 * 60 * 1000);
+  const prevFrom = new Date(prevTo.getTime() - durationMs);
+  return { from: fmtDateInput(prevFrom), to: fmtDateInput(prevTo) };
+}
+function pctChange(curr, prev) {
+  if (prev === 0) return curr === 0 ? 0 : 100;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+function changeHtml(curr, prev, invert) {
+  const pct = pctChange(curr, prev);
+  const positive = invert ? pct <= 0 : pct >= 0;
+  const arrow = pct >= 0 ? '▲' : '▼';
+  return `<span class="${positive ? 'income' : 'expense'}" style="font-size:12px;font-weight:600">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+}
 
 let reportsDateFrom = '';
 let reportsDateTo = '';
+// (Roadmap Etapa 9, hallazgo #10) el Panel tiene su propio período elegido,
+// independiente del de Reportes — así se puede mirar "este mes" en el Panel
+// sin desarmar lo que se estaba mirando en Reportes, y viceversa.
+let dashboardDateFrom = '';
+let dashboardDateTo = '';
+function dashboardSetMonth(offset) {
+  const range = getMonthRange(offset);
+  dashboardDateFrom = range.from;
+  dashboardDateTo = range.to;
+  renderView();
+}
+function dashboardApplyDateFilter() {
+  dashboardDateFrom = document.getElementById('dashboardDateFrom').value;
+  dashboardDateTo = document.getElementById('dashboardDateTo').value;
+  renderView();
+}
 
 async function renderReports() {
   document.getElementById('viewActions').innerHTML = '';
@@ -623,28 +660,11 @@ async function renderReports() {
     reportsDateTo = thisMonth.to;
   }
 
-  // Calcular el período anterior de igual duración, inmediatamente antes
-  const from = new Date(reportsDateFrom);
-  const to = new Date(reportsDateTo);
-  const durationMs = to.getTime() - from.getTime();
-  const prevTo = new Date(from.getTime() - 24 * 60 * 60 * 1000);
-  const prevFrom = new Date(prevTo.getTime() - durationMs);
-
+  const prev = previousPeriodRange(reportsDateFrom, reportsDateTo);
   const [current, previous] = await Promise.all([
     api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${reportsDateFrom}&date_to=${reportsDateTo}`),
-    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${fmtDateInput(prevFrom)}&date_to=${fmtDateInput(prevTo)}`),
+    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${prev.from}&date_to=${prev.to}`),
   ]);
-
-  const pctChange = (curr, prev) => {
-    if (prev === 0) return curr === 0 ? 0 : 100;
-    return ((curr - prev) / Math.abs(prev)) * 100;
-  };
-  const changeHtml = (curr, prev, invert) => {
-    const pct = pctChange(curr, prev);
-    const positive = invert ? pct <= 0 : pct >= 0;
-    const arrow = pct >= 0 ? '▲' : '▼';
-    return `<span class="${positive ? 'income' : 'expense'}" style="font-size:12px;font-weight:600">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
-  };
 
   el.innerHTML = `
     <div class="card">
@@ -658,7 +678,7 @@ async function renderReports() {
           <input type="date" id="reportsDateTo" value="${reportsDateTo}" onchange="reportsApplyDateFilter()">
         </div>
       </div>
-      <div class="hint">Comparado contra el período inmediato anterior de igual duración (${fmtDateInput(prevFrom)} a ${fmtDateInput(prevTo)}).</div>
+      <div class="hint">Comparado contra el período inmediato anterior de igual duración (${prev.from} a ${prev.to}).</div>
     </div>
 
     <div class="kpi-row">
@@ -683,7 +703,10 @@ async function renderReports() {
     </div>
 
     <div class="card">
-      <div class="card-title">Estado de resultados — ${reportsDateFrom} a ${reportsDateTo}</div>
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Estado de resultados — ${reportsDateFrom} a ${reportsDateTo}</div>
+        <button class="btn btn-sm" onclick="downloadFile('/reports/pnl/export?business_unit_id=${state.selectedBU}&date_from=${reportsDateFrom}&date_to=${reportsDateTo}', 'estado_resultados.xlsx')">Exportar (Excel)</button>
+      </div>
       <table class="ledger">
         <thead><tr><th>Concepto</th><th style="text-align:right">Período actual</th><th style="text-align:right">Período anterior</th><th style="text-align:right">Variación</th></tr></thead>
         <tbody>
@@ -715,8 +738,16 @@ function reportsApplyDateFilter() {
 
 async function renderDashboard() {
   const el = document.getElementById('view');
-  const [d, cashPending, salesVerify, purchaseVerify, trash] = await Promise.all([
+  if (!dashboardDateFrom || !dashboardDateTo) {
+    const thisMonth = getMonthRange(0);
+    dashboardDateFrom = thisMonth.from;
+    dashboardDateTo = thisMonth.to;
+  }
+  const prev = previousPeriodRange(dashboardDateFrom, dashboardDateTo);
+  const [d, pnlCurrent, pnlPrevious, cashPending, salesVerify, purchaseVerify, trash] = await Promise.all([
     api(`/dashboard/summary?business_unit_id=${state.selectedBU}`),
+    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${dashboardDateFrom}&date_to=${dashboardDateTo}`),
+    api(`/reports/pnl?business_unit_id=${state.selectedBU}&date_from=${prev.from}&date_to=${prev.to}`),
     api('/cash-movements/pending'),
     api('/sale-collections/pending'),
     api('/purchase-payments/pending'),
@@ -736,11 +767,33 @@ async function renderDashboard() {
   const hasPending = cashPending.length || salesVerifyBU.length || purchaseVerifyBU.length || trashSoon.length;
 
   el.innerHTML = `
+    <div class="card">
+      <div class="section-toolbar">
+        <div class="card-title" style="margin:0">Período</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-sm" onclick="dashboardSetMonth(-1)">Mes anterior</button>
+          <button class="btn btn-sm" onclick="dashboardSetMonth(0)">Este mes</button>
+          <input type="date" id="dashboardDateFrom" value="${dashboardDateFrom}" onchange="dashboardApplyDateFilter()">
+          <span class="hint">a</span>
+          <input type="date" id="dashboardDateTo" value="${dashboardDateTo}" onchange="dashboardApplyDateFilter()">
+        </div>
+      </div>
+      <div class="hint">Ventas y Compras de abajo son de este período, comparadas contra el inmediato anterior de igual duración (${prev.from} a ${prev.to}). Stock y Proyectos activos son a hoy, no dependen del período. Para el detalle completo con Estado de resultados exportable, ver Reportes.</div>
+    </div>
+
     <div class="kpi-row">
-      <div class="kpi"><div class="kpi-label">Ventas confirmadas</div><div class="kpi-value income">$ ${fmtMoney(d.totalSales)}</div></div>
-      <div class="kpi"><div class="kpi-label">Compras confirmadas</div><div class="kpi-value expense">$ ${fmtMoney(d.totalPurchases)}</div></div>
-      <div class="kpi"><div class="kpi-label">Unidades en stock</div><div class="kpi-value">${fmtQty(d.stockUnits)}</div></div>
-      <div class="kpi"><div class="kpi-label">Proyectos activos</div><div class="kpi-value">${d.activeProjectsCount}</div></div>
+      <div class="kpi">
+        <div class="kpi-label">Ventas confirmadas</div>
+        <div class="kpi-value income">$ ${fmtMoney(pnlCurrent.sales_total)}</div>
+        <div style="margin-top:6px">${changeHtml(pnlCurrent.sales_total, pnlPrevious.sales_total, false)}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Compras confirmadas</div>
+        <div class="kpi-value expense">$ ${fmtMoney(pnlCurrent.purchases_total)}</div>
+        <div style="margin-top:6px">${changeHtml(pnlCurrent.purchases_total, pnlPrevious.purchases_total, true)}</div>
+      </div>
+      <div class="kpi"><div class="kpi-label">Unidades en stock (a hoy)</div><div class="kpi-value">${fmtQty(d.stockUnits)}</div></div>
+      <div class="kpi"><div class="kpi-label">Proyectos activos (a hoy)</div><div class="kpi-value">${d.activeProjectsCount}</div></div>
     </div>
 
     ${hasPending ? `
