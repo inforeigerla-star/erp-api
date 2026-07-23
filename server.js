@@ -240,22 +240,33 @@ async function purgeExpiredTrash() {
 }
 setInterval(purgeExpiredTrash, 1000 * 60 * 60); // cada 1 hora
 
+// (Rendimiento, jul.2026) Esto era el pedido más lento, por lejos, de todos
+// los que hace el Panel: purgeExpiredTrash() ya corre solo cada 1 hora
+// (setInterval más abajo) — llamarlo también acá, en cada apertura de esta
+// pantalla, eran 12 DELETE de más, uno por tabla, en fila, sin necesidad
+// (en el peor caso, un ítem vencido en la última hora tarda hasta 1 hora en
+// purgarse en vez de purgarse al instante — nada grave con una ventana de 30
+// días). Y después, las 12 consultas SELECT (una por tabla) corrían también
+// en fila, una atrás de la otra, en vez de en paralelo. Entre las dos cosas
+// eran 24 viajes a la base de datos en serie en cada carga del Panel. Ahora:
+// se saca el purge de acá (el de cada hora alcanza) y las 12 consultas
+// corren todas juntas.
 app.get('/trash', adminRequired, async (req, res) => {
-  await purgeExpiredTrash();
-  const results = [];
-  for (const key in TRASH_TABLES) {
-    const { table, nameCol, label } = TRASH_TABLES[key];
-    const r = await pool.query(
-      `SELECT id, ${nameCol} AS name, deleted_at FROM ${table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
-    );
-    r.rows.forEach(row => {
-      const daysElapsed = (Date.now() - new Date(row.deleted_at).getTime()) / (1000 * 60 * 60 * 24);
-      results.push({
-        type: key, type_label: label, id: row.id, name: row.name,
-        deleted_at: row.deleted_at, days_remaining: Math.max(0, Math.ceil(30 - daysElapsed)),
+  const perTable = await Promise.all(
+    Object.entries(TRASH_TABLES).map(async ([key, { table, nameCol, label }]) => {
+      const r = await pool.query(
+        `SELECT id, ${nameCol} AS name, deleted_at FROM ${table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+      );
+      return r.rows.map(row => {
+        const daysElapsed = (Date.now() - new Date(row.deleted_at).getTime()) / (1000 * 60 * 60 * 24);
+        return {
+          type: key, type_label: label, id: row.id, name: row.name,
+          deleted_at: row.deleted_at, days_remaining: Math.max(0, Math.ceil(30 - daysElapsed)),
+        };
       });
-    });
-  }
+    })
+  );
+  const results = perTable.flat();
   results.sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
   res.json(results);
 });
