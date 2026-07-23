@@ -186,6 +186,11 @@ button, input, select { font-family: inherit; font-size: inherit; }
 .conn-status.ok .dot { background: #E8E8EA; box-shadow: 0 0 0 3px rgba(232,232,234,0.15); }
 .conn-status.err .dot { background: #A33; box-shadow: 0 0 0 3px rgba(170,51,51,0.2); }
 
+/* Punto rojo en el listado de ventas: recuerda que hay un cobro confirmado
+   todavía sin convertir a USD (ver Ventas > Procesar cobro). Puramente
+   informativo, no es clickeable. */
+.pending-usd-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); margin-left: 6px; vertical-align: middle; cursor: help; }
+
 /* ---------- MAIN ---------- */
 .main { flex: 1; padding: 36px 44px 70px 44px; max-width: none; width: 100%; }
 

@@ -2843,6 +2843,9 @@ async function renderSales() {
   // realidad no requiere ninguna acción urgente.
   const verifyTrulyPending = verifyBU.filter(p => !p.verified);
   const verifyConvertible = verifyBU.filter(p => p.verified);
+  // Ids de venta con un cobro confirmado que todavía se puede convertir a USD.
+  // Se usa en "Todas las ventas" para mostrar un recordatorio visual (punto rojo).
+  const pendingUsdConversionSaleIds = new Set(verifyConvertible.map(p => p.sale_id));
 
   const tabsHtml = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
@@ -2980,7 +2983,7 @@ async function renderSales() {
       </div>
       ${tableOrEmpty(rows, ['#', 'Cliente', 'Fecha', 'Estado', 'Cobro', 'Total', ''], (s) => `
         <tr>
-          <td class="mono">#${s.id}</td>
+          <td class="mono">#${s.id}${pendingUsdConversionSaleIds.has(s.id) ? `<span class="pending-usd-dot" title="Cobro confirmado: todavía se puede convertir a USD"></span>` : ''}</td>
           <td>
             <div class="two-line-main">${customerName(s.customer_id)}</div>
             <div class="two-line-sub mono">${customerTaxId(s.customer_id)}</div>
