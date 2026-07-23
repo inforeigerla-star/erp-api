@@ -308,7 +308,14 @@ function applyBUTheme() {
   const bu = state.businessUnits.find(b => b.id === state.selectedBU);
   const key = Object.keys(BU_THEME).find(k => (bu?.name || '').toLowerCase().includes(k));
   const theme = BU_THEME[key] || { logo: 'assets/logo.jpg', accent: '#2F6F4E' };
-  document.getElementById('brandLogo').src = theme.logo;
+  const brandLogo = document.getElementById('brandLogo');
+  brandLogo.src = theme.logo;
+  // (jul.2026) Solo cuando hay un logo de unidad de negocio real (key
+  // encontrada) se saca el filter:invert(1) que trae .brand-logo por
+  // defecto — ver el comentario en styles.css. El logo genérico (sin
+  // unidad de negocio reconocida) sigue mostrándose invertido, como
+  // siempre.
+  brandLogo.classList.toggle('brand-logo-themed', !!key);
   document.documentElement.style.setProperty('--bu-accent', theme.accent);
   const watermark = document.getElementById('topbarWatermark');
   if (watermark) watermark.src = theme.logo;

@@ -83,6 +83,16 @@ button, input, select { font-family: inherit; font-size: inherit; }
   flex-shrink: 0;
   opacity: 0.95;
 }
+/* (jul.2026) El invert(1) de arriba está pensado para el isotipo genérico
+   (logo.jpg, blanco/negro) — invertido queda un chip blanco prolijo sobre
+   el sidebar oscuro. El problema: ese mismo filtro se aplicaba también
+   cuando el logo mostrado es el de una unidad de negocio (reiger, endless,
+   sadev, peugeot, kw), y ahí invertir los colores reales del logo (el
+   magenta de Reiger pasaba a verde, por ejemplo) es exactamente lo que
+   Matias reportó como "se ve de otro color". Esta clase se agrega por JS
+   (applyBUTheme) solo cuando el logo activo es el de una unidad de negocio,
+   y anula el invert para que se vea con sus colores reales. */
+.brand-logo.brand-logo-themed { filter: none; }
 .brand-name {
   font-family: var(--display);
   font-weight: 600;
