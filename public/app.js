@@ -992,11 +992,16 @@ async function renderArticles() {
           ${articlesSearch ? `<button class="btn btn-sm" onclick="articlesClearSearch()">Limpiar</button>` : ''}
         </div>
       </div>
-      <table class="ledger sortable-table">
+      <table class="ledger sortable-table dense-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
-          ${['Código', 'Cód. alt.', 'Descripción', 'Costo ARS', 'Precio ARS (s/IVA)', 'Precio ARS (c/IVA)', 'Costo USD', 'Precio USD (s/IVA)', 'Precio USD (c/IVA)', 'Obs.', ''].map(h => h
-            ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="">${h}<span class="sort-indicator"></span></th>`
+          ${[
+            ['Código', ''], ['Cód. alt.', ''], ['Descripción', ''],
+            ['Costo ARS', ''], ['P.ARS s/IVA', 'Precio ARS sin IVA'], ['P.ARS c/IVA', 'Precio ARS con IVA'],
+            ['Costo USD', ''], ['P.USD s/IVA', 'Precio USD sin IVA'], ['P.USD c/IVA', 'Precio USD con IVA'],
+            ['Obs.', ''], ['', ''],
+          ].map(([h, title]) => h
+            ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="" ${title ? `title="${title}"` : ''}>${h}<span class="sort-indicator"></span></th>`
             : `<th></th>`).join('')}
         </tr></thead>
         <tbody>
@@ -4596,13 +4601,22 @@ async function renderUsers() {
       <td>${u.username}</td>
       <td class="mono">${u.role}</td>
       <td>${u.active ? statusBadge('OPEN') : statusBadge('CLOSED')}</td>
-      <td>
+      <td style="text-align:right;white-space:nowrap">
         <button class="btn btn-sm" onclick='openEditUserModal(${u.id}, "${u.username}", "${u.role}")'>Editar</button>
-        ${u.role !== 'ADMIN' ? `<button class="btn btn-sm" onclick='openPermissionsModal(${u.id}, "${u.username}", ${JSON.stringify(u.permissions)})'>Permisos</button>` : ''}
-        <button class="btn btn-sm" onclick="toggleUser(${u.id})">${u.active ? 'Desactivar' : 'Activar'}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.username}')">Eliminar</button>
+        ${rowActionsMenu(`user_${u.id}`, userRowMenuItems(u))}
       </td>
     </tr>`, 'No hay usuarios cargados.')}</div>`;
+}
+// "Editar" queda visible (acción más usada); Permisos/Activar-Desactivar/Eliminar
+// pasan al "⋮" — igual criterio que Ventas/Compras/Stock/Remitos.
+function userRowMenuItems(u) {
+  const items = [];
+  if (u.role !== 'ADMIN') {
+    items.push({ label: 'Permisos', onclick: `openPermissionsModal(${u.id}, "${u.username}", ${JSON.stringify(u.permissions).replace(/"/g, '&quot;')})` });
+  }
+  items.push({ label: u.active ? 'Desactivar' : 'Activar', onclick: `toggleUser(${u.id})` });
+  items.push({ label: 'Eliminar', onclick: `deleteUser(${u.id}, '${u.username}')`, danger: true });
+  return items;
 }
 function switchUsersTab(tab) {
   usersSubTab = tab;

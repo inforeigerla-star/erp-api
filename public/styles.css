@@ -360,6 +360,14 @@ table.ledger tr:hover td { background: #FAFAFA; }
 .two-line-main { font-size: 13.5px; color: var(--ink); }
 .two-line-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+/* Tabla "densa" (etapa de mejora visual): para tablas con muchas columnas
+   numéricas por naturaleza (ej. Artículos: costo/precio en 2 monedas x 2 IVA),
+   donde no conviene fusionar columnas porque cada una se usa para ordenar por
+   separado. Achica un poco padding y letra para que respire mejor sin perder
+   ninguna columna ni funcionalidad de orden. */
+.dense-table th { padding: 8px 8px; font-size: 10px; }
+.dense-table td { padding: 9px 8px; font-size: 12.5px; }
+
 /* Menú "⋮" de acciones por fila: agrupa las acciones menos frecuentes para
    no competir por espacio con los botones principales de la fila. */
 .row-menu-wrap { position: relative; display: inline-block; }
