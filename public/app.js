@@ -275,11 +275,19 @@ async function loadBusinessUnits() {
   sel.onchange = () => selectBusinessUnit(Number(sel.value));
   applyBUTheme();
 }
-function selectBusinessUnit(id, skipRender) {
+async function selectBusinessUnit(id, skipRender) {
   state.selectedBU = id;
   const sel = document.getElementById('buSelect');
   if (sel) sel.value = id;
   applyBUTheme();
+  // Al arrancar, el cache de artículos solo trae los de la unidad de negocio
+  // inicial (ver loadMasterData). Si el catálogo completo (todas las
+  // unidades, se carga solo en segundo plano) todavía no llegó, se espera acá
+  // antes de mostrar la pantalla — si no, artByBU() filtraría sobre datos de
+  // la unidad anterior y esta pantalla se vería vacía. En la práctica esto
+  // casi nunca espera nada: el cache completo suele llegar mucho antes de que
+  // alguien cambie de unidad de negocio.
+  await ensureFullArticleCache();
   if (!skipRender) renderView();
 }
 function cycleBusinessUnit(direction) {
@@ -363,18 +371,48 @@ async function renderBusinessUnits() {
     </div>`;
 }
 
+// (Rendimiento, jul.2026) El catálogo de artículos ronda las 20.000-25.000
+// filas entre todas las unidades de negocio — traerlo entero en cada
+// arranque era, con diferencia, el pedido más pesado de esta carga inicial.
+// Acá solo se piden los artículos de la unidad de negocio que ya va a verse
+// (mucho más liviano); el resto del catálogo se completa después, en
+// segundo plano (ver ensureFullArticleCache), sin atrasar el Panel.
 async function loadMasterData() {
   const [suppliers, customers, warehouses, articles, projects, cashBoxes] = await Promise.all([
-    api('/suppliers'), api('/customers'), api('/warehouses'), api('/articles'), api('/projects'), api('/cash-boxes'),
+    api('/suppliers'), api('/customers'), api('/warehouses'),
+    api(`/articles?business_unit_id=${state.selectedBU}`),
+    api('/projects'), api('/cash-boxes'),
   ]);
   state.cache = { suppliers, customers, warehouses, articles, projects, cashBoxes };
+  _fullArticleCachePromise = null; // el cache recién cargado es parcial (una sola unidad)
 }
 async function refreshSuppliers() { state.cache.suppliers = await api('/suppliers'); }
 async function refreshCustomers() { state.cache.customers = await api('/customers'); }
 async function refreshWarehouses() { state.cache.warehouses = await api('/warehouses'); }
-async function refreshArticles() { state.cache.articles = await api('/articles'); }
+// Este refresco (tras crear/editar/eliminar un artículo desde la pantalla
+// Artículos) siempre trae el catálogo completo, no solo el de la unidad
+// activa — así el cache queda consistente con lo que ya garantiza
+// ensureFullArticleCache() para cambiar de unidad de negocio o el buscador
+// global.
+async function refreshArticles() {
+  state.cache.articles = await api('/articles');
+  _fullArticleCachePromise = Promise.resolve();
+}
 async function refreshProjects() { state.cache.projects = await api('/projects'); }
 async function refreshCashBoxes() { state.cache.cashBoxes = await api('/cash-boxes'); }
+
+// Carga en segundo plano el catálogo completo de artículos (todas las
+// unidades de negocio), para que cambiar de unidad o saltar a un artículo de
+// otra unidad desde el buscador global sigan funcionando como siempre.
+// `_fullArticleCachePromise` evita pedirlo dos veces si dos pantallas lo
+// necesitan casi al mismo tiempo.
+let _fullArticleCachePromise = null;
+function ensureFullArticleCache() {
+  if (!_fullArticleCachePromise) {
+    _fullArticleCachePromise = api('/articles').then(all => { state.cache.articles = all; });
+  }
+  return _fullArticleCachePromise;
+}
 
 function whByBU() { return state.cache.warehouses.filter(w => w.business_unit_id === state.selectedBU); }
 function artByBU() { return state.cache.articles.filter(a => a.business_unit_id === state.selectedBU); }
@@ -492,16 +530,21 @@ async function runGlobalSearch(q) {
   resultsEl.style.display = 'block';
 }
 
-function selectGlobalSearchResult(kind, idx) {
+async function selectGlobalSearchResult(kind, idx) {
   const data = window._globalSearchData;
   if (!data) return;
   const item = data[kind][idx];
   if (!item) return;
   closeGlobalSearch();
 
-  const switchBUIfNeeded = () => {
+  // (Rendimiento, jul.2026) selectBusinessUnit() ahora puede esperar a que
+  // termine de cargar el catálogo completo de artículos en segundo plano
+  // (ver ensureFullArticleCache) — por eso switchBUIfNeeded() pasó a ser
+  // async y hay que esperarla antes de abrir la pantalla, para no llegar a
+  // un artículo de otra unidad antes de que el cache lo tenga.
+  const switchBUIfNeeded = async () => {
     if (item.business_unit_id != null && item.business_unit_id !== state.selectedBU) {
-      selectBusinessUnit(item.business_unit_id, true);
+      await selectBusinessUnit(item.business_unit_id, true);
     }
   };
 
@@ -510,27 +553,27 @@ function selectGlobalSearchResult(kind, idx) {
   } else if (kind === 'suppliers') {
     goToView('suppliers', () => openEditContactModal('supplier', item.id));
   } else if (kind === 'articles') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('articles', () => openEditArticleModal(item.id));
   } else if (kind === 'sales') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('sales', () => showSaleDetail(item.id));
   } else if (kind === 'purchases') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     // (Roadmap Etapa 3) Antes solo mostraba un cartel con el resumen, porque
     // Compras no tenía modal de Detalle. Ahora abre igual que Ventas.
     goToView('purchases', () => showPurchaseDetail(item.id));
   } else if (kind === 'quotes') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('quotes', () => showQuoteDetail(item.id));
   } else if (kind === 'shipments') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('shipments', () => showShipmentDetail(item.id));
   } else if (kind === 'projects') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('projects', () => openEditProjectModal(item.id, item.name));
   } else if (kind === 'warehouses') {
-    switchBUIfNeeded();
+    await switchBUIfNeeded();
     goToView('warehouses', () => openEditWarehouseModal(item.id, item.name));
   }
 }
@@ -5418,20 +5461,23 @@ async function boot() {
   // esperando al anterior: primero un ping a /business-units solo para el
   // punto "Conectado", después /business-units de nuevo (duplicado) para
   // llenar el selector, y recién ahí arrancaban en paralelo los 6 pedidos de
-  // loadMasterData() (proveedores, clientes, depósitos, artículos, proyectos,
-  // cajas). loadMasterData() no depende de loadBusinessUnits() para nada —
-  // así que ahora corren los dos juntos, y no hay pedido duplicado. Esto solo
-  // corta tiempo de espera; no cambia qué se carga ni el orden en que las
-  // pantallas quedan disponibles (el Panel sigue esperando a que todo esto
-  // termine antes de dibujarse, igual que antes).
+  // loadMasterData() — y ese último traía el catálogo completo de artículos
+  // (20.000-25.000 filas entre todas las unidades) de una sola vez, sin
+  // filtrar. Ahora: se saca el pedido duplicado, loadBusinessUnits() define
+  // primero la unidad de negocio activa (loadMasterData() la necesita para
+  // pedir solo los artículos de esa unidad, mucho más liviano), y el
+  // catálogo completo de las demás unidades se completa después en segundo
+  // plano — el Panel no espera a eso para aparecer.
   try {
-    await Promise.all([loadBusinessUnits(), loadMasterData()]);
+    await loadBusinessUnits();
+    await loadMasterData();
     setConnStatus(true);
   } catch (e) {
     setConnStatus(false);
   }
   scheduleSessionExpiryWarning();
   renderView();
+  ensureFullArticleCache();
 }
 
 function applyNavPermissions() {

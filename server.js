@@ -756,8 +756,19 @@ app.put('/articles/:id', async (req, res) => {
     client.release();
   }
 });
+// (Rendimiento, jul.2026) Con el catálogo creciendo a 20.000-25.000
+// artículos, traer todo sin filtrar en cada arranque de la app era el
+// pedido más pesado de la carga inicial. `business_unit_id` es opcional
+// a propósito: sin filtro sigue devolviendo el catálogo completo (lo usan
+// refreshArticles() tras crear/editar un artículo, y la carga en segundo
+// plano del cache completo para cambiar de unidad de negocio o el buscador
+// global), pero el arranque ahora lo manda para traer solo lo que hace
+// falta ver de entrada.
 app.get('/articles', async (req, res) => {
-  const r = await pool.query('SELECT * FROM article_price ORDER BY article_id');
+  const { business_unit_id } = req.query;
+  const r = business_unit_id
+    ? await pool.query('SELECT * FROM article_price WHERE business_unit_id=$1 ORDER BY article_id', [business_unit_id])
+    : await pool.query('SELECT * FROM article_price ORDER BY article_id');
   res.json(r.rows);
 });
 
