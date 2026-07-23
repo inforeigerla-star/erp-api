@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -10,17 +9,32 @@ const pool = require('./db');
 const JWT_SECRET = process.env.JWT_SECRET || 'cambiar-este-secreto-en-produccion';
 
 const app = express();
-app.use(cors());
+// Nota (Roadmap Etapa 1 — Seguridad de acceso, jul.2026): antes acá había
+// `app.use(cors())` sin restricciones, abierto a cualquier origen. Se sacó:
+// el frontend se sirve desde este mismo servidor (`express.static` más abajo),
+// así que el navegador siempre llama a la API desde el mismo origen y nunca
+// necesitó CORS para funcionar. Sacarlo cierra la puerta a que un sitio
+// externo llame a esta API desde el navegador de un usuario logueado, sin
+// ningún efecto sobre el funcionamiento normal de la app.
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- AUTH MIDDLEWARE ----------
-function authRequired(req, res, next) {
+// (Roadmap Etapa 1) Antes solo se validaba la firma/vigencia del token. Ahora
+// también se chequea que el usuario siga activo en ese mismo momento, para
+// que "Desactivar" en Usuarios corte el acceso al instante en vez de esperar
+// a que el token expire solo (hasta 12hs después). Es una consulta extra por
+// pedido, sobre la clave primaria de app_user — costo insignificante para el
+// volumen de uso de este sistema.
+async function authRequired(req, res, next) {
   const header = req.headers.authorization;
   if (!header) return res.status(401).json({ error: 'No autenticado' });
   const token = header.replace('Bearer ', '');
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    const r = await pool.query('SELECT active FROM app_user WHERE id=$1', [payload.id]);
+    if (!r.rows[0]?.active) return res.status(401).json({ error: 'Sesión inválida o expirada' });
+    req.user = payload;
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Sesión inválida o expirada' });
@@ -32,14 +46,38 @@ function adminRequired(req, res, next) {
 }
 
 // ---------- AUTH ROUTES (públicas) ----------
+// (Roadmap Etapa 1) Límite de intentos fallidos de login: en memoria, por
+// nombre de usuario (no hace falta un paquete nuevo ni una tabla — se
+// reinicia solo en cada redeploy, lo cual es aceptable para este caso de
+// uso). 5 intentos fallidos seguidos → 15 minutos de espera. Se resetea en
+// cualquier login exitoso.
+const loginAttempts = new Map(); // username en minúsculas -> { count, blockedUntil }
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+
 app.post('/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+    const key = String(username || '').toLowerCase();
+    const attempt = loginAttempts.get(key);
+    if (attempt?.blockedUntil && attempt.blockedUntil > Date.now()) {
+      const minutesLeft = Math.ceil((attempt.blockedUntil - Date.now()) / 60000);
+      return res.status(429).json({ error: `Demasiados intentos fallidos. Probá de nuevo en ${minutesLeft} minuto(s).` });
+    }
     const r = await pool.query('SELECT * FROM app_user WHERE username=$1 AND active=true', [username]);
     const user = r.rows[0];
-    if (!user) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+    const ok = user && await bcrypt.compare(password, user.password_hash);
+    if (!user || !ok) {
+      const current = loginAttempts.get(key) || { count: 0 };
+      current.count++;
+      if (current.count >= LOGIN_MAX_ATTEMPTS) {
+        current.blockedUntil = Date.now() + LOGIN_BLOCK_MS;
+        current.count = 0;
+      }
+      loginAttempts.set(key, current);
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+    }
+    loginAttempts.delete(key);
     const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
     res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions: user.permissions } });
   } catch (e) {

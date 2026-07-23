@@ -3000,13 +3000,17 @@ async function deleteOperation(kind, id) {
 async function renderDebtors() {
   document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
-  const [pending, all] = await Promise.all([api('/sales/pending-collection'), api('/sales')]);
+  // (Roadmap Etapa 2 — Rendimiento) Antes acá se pedía también `/sales`
+  // completo (toda la historia de ventas, sin filtrar) solo para cruzar el
+  // customer_id de cada factura pendiente. Era innecesario: `pending` ya trae
+  // customer_id en cada fila (se ve más abajo, en la tabla de detalle, que ya
+  // lo usaba directo) — se saca el pedido de más.
+  const pending = await api('/sales/pending-collection');
   const pendingBU = pending.filter(s => s.business_unit_id === state.selectedBU && s.collection_status !== 'COBRADO');
 
   const byCustomer = {};
   pendingBU.forEach(s => {
-    const sale = all.find(a => a.id === s.id) || s;
-    const custId = sale.customer_id;
+    const custId = s.customer_id;
     if (!byCustomer[custId]) byCustomer[custId] = { customer_id: custId, sales: [], total: 0 };
     byCustomer[custId].sales.push(s);
     byCustomer[custId].total += Number(s.remaining_amount);
