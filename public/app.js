@@ -61,6 +61,15 @@ function fmtDate(value, { withTime = true } = {}) {
   });
 }
 function fmtDateShort(value) { return fmtDate(value, { withTime: false }); }
+// (Roadmap Etapa 6) Días transcurridos desde una fecha — para resaltar en las
+// bandejas de "pendiente de verificar" lo que lleva varios días sin
+// confirmarse (antes no había ninguna señal de antigüedad).
+function daysSince(value) {
+  if (!value) return 0;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
 
 // ---------------------------------------------------------
 // Auth
@@ -656,7 +665,25 @@ function reportsApplyDateFilter() {
 
 async function renderDashboard() {
   const el = document.getElementById('view');
-  const d = await api(`/dashboard/summary?business_unit_id=${state.selectedBU}`);
+  const [d, cashPending, salesVerify, purchaseVerify, trash] = await Promise.all([
+    api(`/dashboard/summary?business_unit_id=${state.selectedBU}`),
+    api('/cash-movements/pending'),
+    api('/sale-collections/pending'),
+    api('/purchase-payments/pending'),
+    api('/trash'),
+  ]);
+
+  // (Roadmap Etapa 6) Antes había que visitar 3 pantallas separadas (Finanzas
+  // > Verificar, Ventas > Verificar cobros, Compras > Verificar pago) para
+  // saber si quedaba algo pendiente de confirmar. Acá se junta todo en un
+  // solo lugar. Ventas usa el mismo filtro que ya usa esa misma pestaña
+  // (!p.verified) para no contar los cobros que solo esperan conversión a
+  // USD, que no son urgentes. Finanzas y Papelera no se filtran por unidad de
+  // negocio porque ya son conceptos generales en el resto del ERP.
+  const salesVerifyBU = salesVerify.filter(p => p.business_unit_id === state.selectedBU && !p.verified);
+  const purchaseVerifyBU = purchaseVerify.filter(p => p.business_unit_id === state.selectedBU);
+  const trashSoon = trash.filter(t => t.days_remaining <= 2);
+  const hasPending = cashPending.length || salesVerifyBU.length || purchaseVerifyBU.length || trashSoon.length;
 
   el.innerHTML = `
     <div class="kpi-row">
@@ -665,6 +692,18 @@ async function renderDashboard() {
       <div class="kpi"><div class="kpi-label">Unidades en stock</div><div class="kpi-value">${fmtQty(d.stockUnits)}</div></div>
       <div class="kpi"><div class="kpi-label">Proyectos activos</div><div class="kpi-value">${d.activeProjectsCount}</div></div>
     </div>
+
+    ${hasPending ? `
+    <div class="card">
+      <div class="card-title">Pendiente de atención</div>
+      <div class="hint" style="margin-bottom:10px">Todo lo que espera una confirmación tuya, junto en un solo lugar.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        ${cashPending.length ? `<button class="btn btn-sm" onclick="financeSubTab='verificar'; goToView('cash')">Finanzas: ${cashPending.length} movimiento(s) sin verificar</button>` : ''}
+        ${salesVerifyBU.length ? `<button class="btn btn-sm" onclick="salesSubTab='verify'; goToView('sales')">Ventas: ${salesVerifyBU.length} cobro(s) sin verificar</button>` : ''}
+        ${purchaseVerifyBU.length ? `<button class="btn btn-sm" onclick="purchasesSubTab='verify'; goToView('purchases')">Compras: ${purchaseVerifyBU.length} pago(s) sin verificar</button>` : ''}
+        ${trashSoon.length ? `<button class="btn btn-sm btn-danger" onclick="goToView('trash')">Papelera: ${trashSoon.length} elemento(s) se eliminan en 2 días o menos</button>` : ''}
+      </div>
+    </div>` : ''}
 
     <div class="card">
       <div class="card-title">Rentabilidad por proyecto (centro de costos)</div>
@@ -1844,8 +1883,8 @@ async function renderPurchases() {
         <div class="card-title">Pagos que todavía no se movieron físicamente desde su caja/sobre</div>
         <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el pago de la compra ya salió realmente de la caja o sobre elegido.</div>
         ${tableOrEmpty(verifyBU, ['Fecha', 'Compra', 'Proveedor', 'Caja / Sobre origen', 'Monto', ''], (p) => `
-          <tr>
-            <td class="mono">${fmtDate(p.created_at)}</td>
+          <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td class="mono">#${p.purchase_id}</td>
             <td>${p.supplier_name}</td>
             <td>${p.cash_box_name}</td>
@@ -2694,8 +2733,8 @@ async function renderSales() {
         <div class="card-title">Pendientes de confirmar</div>
         <div class="hint" style="margin-bottom:14px">Los dólares de una conversión bancaria en curso siguen pidiendo esta confirmación aparte. Hasta que se verifique, no afectan el saldo de esa caja.</div>
         ${tableOrEmpty(verifyTrulyPending, ['Fecha', 'Venta', 'Cliente', 'Movimiento', 'Caja / Sobre', 'Monto', ''], (p) => `
-          <tr>
-            <td class="mono">${fmtDate(p.created_at)}</td>
+          <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td class="mono">#${p.sale_id}</td>
             <td>${p.customer_name}</td>
             <td>${p.direction === 'OUT' ? '<span class="hint">↑ Egreso</span>' : '<span class="hint">↓ Ingreso</span>'}</td>
@@ -4326,12 +4365,12 @@ async function renderFinance() {
       <div class="card">
         <div class="card-title">Movimientos manuales pendientes de verificación ${pending.length ? `(${pending.length})` : ''}</div>
         ${tableOrEmpty(pending, ['Fecha', 'Tipo', 'Origen', 'Destino', 'Monto', 'Descripción', ''], (p) => `
-          <tr>
-            <td class="mono">${fmtDate(p.created_at)}</td>
+          <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td>${p.kind === 'TRANSFER' ? 'Transferencia' : p.kind === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
             <td>${p.from_box_name || '-'}</td>
             <td>${p.to_box_name || '-'}</td>
-            <td class="num income">$ ${fmtMoney(p.amount)}</td>
+            <td class="num ${p.kind === 'EXPENSE' ? 'expense' : p.kind === 'INCOME' ? 'income' : ''}">$ ${fmtMoney(p.amount)}</td>
             <td>${p.description || '-'}</td>
             <td>
               <button class="btn btn-sm btn-primary" onclick="verifyPendingMovement(${p.id})">Confirmar movimiento físico</button>
