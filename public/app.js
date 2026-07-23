@@ -309,7 +309,7 @@ function projByBU() { return state.cache.projects.filter(p => p.business_unit_id
 const viewTitles = {
   dashboard: 'Panel', stock: 'Stock', purchases: 'Compras', sales: 'Ventas', quotes: 'Presupuestos', shipments: 'Remitos de envío',
   articles: 'Artículos', warehouses: 'Depósitos', suppliers: 'Proveedores',
-  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', 'business-units': 'Unidades de negocio', trash: 'Papelera', debtors: 'Deudores', reports: 'Reportes',
+  customers: 'Clientes', projects: 'Proyectos', cash: 'Finanzas', users: 'Usuarios', 'business-units': 'Unidades de negocio', trash: 'Papelera', debtors: 'Deudores', payables: 'A pagar', reports: 'Reportes',
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -499,6 +499,7 @@ async function renderView() {
       case 'business-units': await renderBusinessUnits(); break;
       case 'trash': await renderTrash(); break;
       case 'debtors': await renderDebtors(); break;
+      case 'payables': await renderPayables(); break;
     }
   } catch (e) {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}<br><button class="btn btn-sm" style="margin-top:10px" onclick="renderView()">Reintentar</button></div>`;
@@ -1505,7 +1506,8 @@ async function renderSuppliers() {
         ${listSearchToolbarHtml('suppliers', 'suppliersSearchInput', 'Buscar por nombre o CUIT…')}
       </div>
       ${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Saldo cta. cte.', ''], (s) => `
-        <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td><td class="num ${Number(s.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(s.balance || 0)}</td>
+        <tr><td>${s.name}</td><td class="mono">${s.tax_id || '-'}</td>
+        <td class="num ${Number(s.balance) > 0 ? 'expense' : ''}" style="cursor:pointer;text-decoration:underline" title="Ver cuenta corriente" onclick="showContactStatement('supplier', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">$ ${fmtMoney(s.balance || 0)}</td>
         <td>
           <button class="btn btn-sm" onclick="openEditContactModal('supplier', ${s.id})">Editar</button>
           <button class="btn btn-sm btn-danger" onclick="deleteEntity('suppliers', ${s.id}, '${s.name.replace(/'/g, "\\'")}')">Eliminar</button>
@@ -1536,7 +1538,8 @@ async function renderCustomers() {
         ${listSearchToolbarHtml('customers', 'customersSearchInput', 'Buscar por nombre o CUIT…')}
       </div>
       ${tableOrEmpty(rows, ['Nombre', 'CUIT/Tax ID', 'Deuda pendiente', ''], (c) => `
-        <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td><td class="num ${Number(c.balance) > 0 ? 'expense' : ''}">$ ${fmtMoney(c.balance || 0)}</td>
+        <tr><td>${c.name}</td><td class="mono">${c.tax_id || '-'}</td>
+        <td class="num ${Number(c.balance) > 0 ? 'expense' : ''}" style="cursor:pointer;text-decoration:underline" title="Ver cuenta corriente" onclick="showContactStatement('customer', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">$ ${fmtMoney(c.balance || 0)}</td>
         <td>
           <button class="btn btn-sm" onclick="openEditContactModal('customer', ${c.id})">Editar</button>
           <button class="btn btn-sm btn-danger" onclick="deleteEntity('customers', ${c.id}, '${c.name.replace(/'/g, "\\'")}')">Eliminar</button>
@@ -2044,10 +2047,11 @@ async function renderQuotes() {
           <td class="mono">${fmtDateShort(q.date)}</td>
           <td>${quoteStatusBadge(q.status)}</td>
           <td class="num income">${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)}</td>
-          <td>
+          <td style="text-align:right;white-space:nowrap">
             <button class="btn btn-sm" onclick="showQuoteDetail(${q.id})">Detalle</button>
             ${q.status === 'PENDING' ? `<button class="btn btn-sm btn-primary" onclick="convertQuoteToSale(${q.id})">Convertir en venta</button>` : ''}
-            <button class="btn btn-sm btn-danger" onclick="deleteQuote(${q.id})">Eliminar</button>
+            ${q.status === 'CONVERTED' && q.converted_sale_id ? `<button class="btn btn-sm" onclick="goToView('sales', () => showSaleDetail(${q.converted_sale_id}))">Ver venta #${q.converted_sale_id}</button>` : ''}
+            ${rowActionsMenu(`quote_${q.id}`, quoteRowMenuItems(q))}
           </td>
         </tr>`, 'No hay presupuestos cargados en esta unidad.', (q) => q.id)}
       ${total ? paginationControlsHtml('quotes', st.page, total, limit) : ''}
@@ -2079,20 +2083,35 @@ async function deleteQuote(id) {
   if (!confirm(`¿Eliminar el presupuesto #${id}?`)) return;
   try { await api(`/quotes/${id}`, { method: 'DELETE' }); toast('Presupuesto eliminado.'); renderView(); } catch (e) { toast(e.message, 'error'); }
 }
+// (Roadmap Etapa 4) "Editar" solo mientras está PENDING (el backend también
+// lo valida). "Convertir en venta"/"Ver venta" quedan visibles fuera del
+// menú por ser la acción principal de cada estado — ver renderQuotes().
+function quoteRowMenuItems(q) {
+  const items = [];
+  if (q.status === 'PENDING') items.push({ label: 'Editar', onclick: `openEditQuoteModal(${q.id})` });
+  items.push({ label: 'Eliminar', onclick: `deleteQuote(${q.id})`, danger: true });
+  return items;
+}
 
-function newQuoteModal() {
+// (Roadmap Etapa 4) Antes newQuoteModal()/createQuote() solo servían para dar
+// de alta. Se unificaron en quoteModal(existing) + buildQuotePayload() para
+// que alta y edición compartan el mismo formulario, mismo patrón que ya se
+// usa en newOperationModal (Ventas/Compras).
+function quoteModal(existing) {
   window._stockLookup = null;
-  const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
+  const isEdit = !!existing;
+  const q = existing?.quote;
+  const contactItems = reorderWithPreferred(state.cache.customers.map(c => ({ id: c.id, label: c.name })), q?.customer_id || null);
   const whItems = [{ id: '', label: 'Sin depósito' }, ...whByBU().map(w => ({ id: w.id, label: w.name }))];
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
 
   lineItemCount = 0;
   openModal(`
-    <h2>Nuevo presupuesto</h2>
-    <div class="field"><label>Cliente</label>${searchableSelectHtml('quote_contact', contactItems, 'Buscar cliente…')}</div>
+    <h2>${isEdit ? `Editar presupuesto #${q.id}` : 'Nuevo presupuesto'}</h2>
+    <div class="field"><label>Cliente</label>${searchableSelectHtml('quote_contact', contactItems, 'Buscar cliente…', isEdit ? contactItems[0]?.label : undefined)}</div>
     <div class="field-row">
-      <div class="field"><label>Depósito (opcional)</label>${searchableSelectHtml('quote_warehouse', whItems, 'Buscar depósito…', 'Sin depósito')}</div>
-      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
+      <div class="field"><label>Depósito (opcional)</label>${searchableSelectHtml('quote_warehouse', reorderWithPreferred(whItems, q?.warehouse_id || null), 'Buscar depósito…', isEdit && q?.warehouse_id ? whItems.find(w => w.id === q.warehouse_id)?.label : 'Sin depósito')}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('quote_project', reorderWithPreferred(projItems, q?.project_id || null), 'Buscar proyecto…', isEdit && q?.project_id ? projItems.find(p => p.id === q.project_id)?.label : 'Sin proyecto')}</div>
     </div>
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
@@ -2101,8 +2120,8 @@ function newQuoteModal() {
     <div class="field-row">
       <div class="field"><label>Moneda</label>
         <select id="f_sale_currency" onchange="refreshAllLinePrices()">
-          <option value="ARS">Pesos argentinos (ARS)</option>
-          <option value="USD">Dólares (USD)</option>
+          <option value="ARS" ${!q || q.currency === 'ARS' ? 'selected' : ''}>Pesos argentinos (ARS)</option>
+          <option value="USD" ${q && q.currency === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
         </select>
       </div>
       <div class="field"><label>Precios</label>
@@ -2112,15 +2131,31 @@ function newQuoteModal() {
         </select>
       </div>
     </div>
-    <div class="field"><label>Observaciones (opcional)</label><input id="f_quote_notes" placeholder="Notas del presupuesto"></div>
+    <div class="field"><label>Observaciones (opcional)</label><input id="f_quote_notes" placeholder="Notas del presupuesto" value="${q ? escAttr(q.notes) : ''}"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="createQuote()">Guardar</button>
+      <button class="btn btn-primary" onclick="${isEdit ? `updateQuote(${q.id})` : 'createQuote()'}">Guardar</button>
     </div>
   `);
-  addLineItem('sale');
+  if (isEdit && existing.items?.length) {
+    existing.items.forEach(item => addExistingLineItem('sale', item));
+  } else {
+    addLineItem('sale');
+  }
 }
-async function createQuote() {
+function newQuoteModal() { quoteModal(null); }
+async function openEditQuoteModal(id) {
+  try {
+    const [quote, items] = await Promise.all([
+      api('/quotes').then(list => list.find(x => x.id === id)),
+      api(`/quotes/${id}/items`),
+    ]);
+    if (!quote) { toast('Presupuesto no encontrado.', 'error'); return; }
+    if (quote.status !== 'PENDING') { toast('Solo se puede editar un presupuesto pendiente.', 'error'); return; }
+    quoteModal({ quote, items });
+  } catch (e) { toast(e.message, 'error'); }
+}
+function buildQuotePayload() {
   const rows = [...document.getElementById('lineItems').children];
   const items = rows.map(row => {
     const idMatch = row.id.replace('line_', '');
@@ -2130,24 +2165,34 @@ async function createQuote() {
       unit_price: parseMoneyInput(document.getElementById(`price_${idMatch}`).value),
     };
   }).filter(i => i.article_id);
-
-  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return; }
-
+  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return null; }
+  return {
+    business_unit_id: state.selectedBU,
+    customer_id: Number(getSearchableValue('quote_contact')),
+    warehouse_id: getSearchableValue('quote_warehouse') ? Number(getSearchableValue('quote_warehouse')) : null,
+    project_id: getSearchableValue('quote_project') ? Number(getSearchableValue('quote_project')) : null,
+    currency: document.getElementById('f_sale_currency').value,
+    notes: document.getElementById('f_quote_notes').value,
+    items,
+  };
+}
+async function createQuote() {
+  const payload = buildQuotePayload();
+  if (!payload) return;
   try {
-    await api('/quotes', {
-      method: 'POST',
-      body: JSON.stringify({
-        business_unit_id: state.selectedBU,
-        customer_id: Number(getSearchableValue('quote_contact')),
-        warehouse_id: getSearchableValue('quote_warehouse') ? Number(getSearchableValue('quote_warehouse')) : null,
-        project_id: getSearchableValue('quote_project') ? Number(getSearchableValue('quote_project')) : null,
-        currency: document.getElementById('f_sale_currency').value,
-        notes: document.getElementById('f_quote_notes').value,
-        items,
-      }),
-    });
+    await api('/quotes', { method: 'POST', body: JSON.stringify(payload) });
     closeModal();
     toast('Presupuesto creado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function updateQuote(id) {
+  const payload = buildQuotePayload();
+  if (!payload) return;
+  try {
+    await api(`/quotes/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    closeModal();
+    toast('Presupuesto actualizado.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2194,44 +2239,81 @@ async function renderShipments() {
 function shipmentsChangePage(page) { listState.shipments.page = page; renderView(); }
 // "Detalle" queda visible (es la puerta de entrada, igual que en Ventas); el
 // resto (Confirmar/Cancelar según estado, Remito, Eliminar) va al "⋮".
+// (Roadmap Etapa 4) "Editar" solo mientras está PENDING (Confirmar mueve
+// stock; el backend también lo valida).
 function shipmentRowMenuItems(s) {
   const items = [];
+  if (s.status === 'PENDING') items.push({ label: 'Editar', onclick: `openEditShipmentModal(${s.id})` });
   if (s.status === 'PENDING') items.push({ label: 'Confirmar', onclick: `confirmShipment(${s.id})` });
   if (s.status === 'CONFIRMED') items.push({ label: 'Cancelar', onclick: `cancelShipment(${s.id})`, danger: true });
   items.push({ label: 'Remito', onclick: `openShipmentDocumentModal(${s.id})` });
   items.push({ label: 'Eliminar', onclick: `deleteShipment(${s.id})`, danger: true });
   return items;
 }
-function newShipmentModal() {
-  const contactItems = state.cache.customers.map(c => ({ id: c.id, label: c.name }));
+// (Roadmap Etapa 4) Antes newShipmentModal()/createShipment() solo servían
+// para dar de alta. Se unificaron en shipmentModal(existing) +
+// buildShipmentPayload(), mismo criterio que quoteModal() de arriba.
+function shipmentModal(existing) {
+  const isEdit = !!existing;
+  const s = existing?.shipment;
+  const contactItems = reorderWithPreferred(state.cache.customers.map(c => ({ id: c.id, label: c.name })), s?.customer_id || null);
   const whItems = whByBU().map(w => ({ id: w.id, label: w.name }));
   const projItems = [{ id: '', label: 'Sin proyecto' }, ...projByBU().map(p => ({ id: p.id, label: p.name }))];
   window._stockLookup = null;
   lineItemCount = 0;
   openModal(`
-    <h2>Nuevo remito de envío</h2>
-    <div class="field"><label>Cliente / destinatario</label>${searchableSelectHtml('ship_contact', contactItems, 'Buscar cliente…')}</div>
+    <h2>${isEdit ? `Editar remito de envío #${s.id}` : 'Nuevo remito de envío'}</h2>
+    <div class="field"><label>Cliente / destinatario</label>${searchableSelectHtml('ship_contact', contactItems, 'Buscar cliente…', isEdit ? contactItems[0]?.label : undefined)}</div>
     <div class="field-row">
-      <div class="field"><label>Depósito</label>${searchableSelectHtml('ship_warehouse', whItems, 'Buscar depósito…')}</div>
-      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('ship_project', projItems, 'Buscar proyecto…', 'Sin proyecto')}</div>
+      <div class="field"><label>Depósito</label>${searchableSelectHtml('ship_warehouse', reorderWithPreferred(whItems, s?.warehouse_id || null), 'Buscar depósito…', isEdit ? whItems.find(w => w.id === s.warehouse_id)?.label : undefined)}</div>
+      <div class="field"><label>Proyecto (opcional)</label>${searchableSelectHtml('ship_project', reorderWithPreferred(projItems, s?.project_id || null), 'Buscar proyecto…', isEdit && s?.project_id ? projItems.find(p => p.id === s.project_id)?.label : 'Sin proyecto')}</div>
     </div>
     <div class="field"><label>Motivo</label>
       <select id="f_ship_reason">
-        <option value="PRESTAMO">Préstamo (ej: pruebas)</option>
-        <option value="REGALO">Regalo</option>
+        <option value="PRESTAMO" ${!s || s.reason === 'PRESTAMO' ? 'selected' : ''}>Préstamo (ej: pruebas)</option>
+        <option value="REGALO" ${s && s.reason === 'REGALO' ? 'selected' : ''}>Regalo</option>
       </select>
     </div>
     <div class="field"><label>Artículos</label>
       <div class="line-items" id="lineItems"></div>
       <button class="btn btn-sm" onclick="addShipmentLineItem()">+ Agregar artículo</button>
     </div>
-    <div class="field"><label>Observaciones (opcional)</label><input id="f_ship_notes" placeholder="Notas de este envío"></div>
+    <div class="field"><label>Observaciones (opcional)</label><input id="f_ship_notes" placeholder="Notas de este envío" value="${s ? escAttr(s.notes) : ''}"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="createShipment()">Guardar</button>
+      <button class="btn btn-primary" onclick="${isEdit ? `updateShipment(${s.id})` : 'createShipment()'}">Guardar</button>
     </div>
   `);
-  addShipmentLineItem();
+  if (isEdit && existing.items?.length) {
+    existing.items.forEach(item => addExistingShipmentLineItem(item));
+  } else {
+    addShipmentLineItem();
+  }
+}
+function newShipmentModal() { shipmentModal(null); }
+async function openEditShipmentModal(id) {
+  try {
+    const full = await api(`/shipments/${id}/full`);
+    if (full.shipment.status !== 'PENDING') { toast('Solo se puede editar un remito pendiente.', 'error'); return; }
+    shipmentModal(full);
+  } catch (e) { toast(e.message, 'error'); }
+}
+function addExistingShipmentLineItem(item) {
+  const id = lineItemCount++;
+  const container = document.getElementById('lineItems');
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = `line_${id}`;
+  row.dataset.articleId = item.article_id;
+  row.innerHTML = `
+    <div class="article-search-wrap">
+      <input type="text" class="article-search-input" id="artsearch_${id}" value="${escAttr(item.code + ' — ' + item.description)}" readonly>
+      <input type="hidden" id="artid_${id}" value="${item.article_id}">
+    </div>
+    <input type="number" step="0.001" id="qty_${id}" value="${item.quantity}" onchange="checkShipmentLineStock(${id})">
+    <button class="remove-line" onclick="document.getElementById('line_${id}').remove();">×</button>
+  `;
+  container.appendChild(row);
 }
 function addShipmentLineItem() {
   const id = lineItemCount++;
@@ -2278,7 +2360,7 @@ async function checkShipmentLineStock(id) {
     document.getElementById(`qty_${id}`).value = available > 0 ? available : '';
   }
 }
-async function createShipment() {
+function buildShipmentPayload() {
   const rows = [...document.getElementById('lineItems').children];
   const items = rows.map(row => {
     const idMatch = row.id.replace('line_', '');
@@ -2287,23 +2369,34 @@ async function createShipment() {
       quantity: Number(document.getElementById(`qty_${idMatch}`).value),
     };
   }).filter(i => i.article_id);
-
-  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return; }
+  if (!items.length) { toast('Agregá al menos un artículo.', 'error'); return null; }
+  return {
+    business_unit_id: state.selectedBU,
+    customer_id: Number(getSearchableValue('ship_contact')),
+    warehouse_id: Number(getSearchableValue('ship_warehouse')),
+    project_id: getSearchableValue('ship_project') ? Number(getSearchableValue('ship_project')) : null,
+    reason: document.getElementById('f_ship_reason').value,
+    notes: document.getElementById('f_ship_notes').value,
+    items,
+  };
+}
+async function createShipment() {
+  const payload = buildShipmentPayload();
+  if (!payload) return;
   try {
-    await api('/shipments', {
-      method: 'POST',
-      body: JSON.stringify({
-        business_unit_id: state.selectedBU,
-        customer_id: Number(getSearchableValue('ship_contact')),
-        warehouse_id: Number(getSearchableValue('ship_warehouse')),
-        project_id: getSearchableValue('ship_project') ? Number(getSearchableValue('ship_project')) : null,
-        reason: document.getElementById('f_ship_reason').value,
-        notes: document.getElementById('f_ship_notes').value,
-        items,
-      }),
-    });
+    await api('/shipments', { method: 'POST', body: JSON.stringify(payload) });
     closeModal();
     toast('Remito de envío creado.');
+    renderView();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function updateShipment(id) {
+  const payload = buildShipmentPayload();
+  if (!payload) return;
+  try {
+    await api(`/shipments/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    closeModal();
+    toast('Remito de envío actualizado.');
     renderView();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3040,6 +3133,9 @@ async function deleteOperation(kind, id) {
 // ---------------------------------------------------------
 // DEUDORES
 // ---------------------------------------------------------
+let debtorsFilterCustomer = null;
+function setDebtorsFilter(customerId) { debtorsFilterCustomer = customerId; renderView(); }
+
 async function renderDebtors() {
   document.getElementById('viewActions').innerHTML = '';
   const el = document.getElementById('view');
@@ -3062,6 +3158,11 @@ async function renderDebtors() {
 
   const totalDebt = pendingBU.reduce((a, s) => a + Number(s.remaining_amount), 0);
 
+  // (Roadmap Etapa 5) Filtro conectado: clic en un cliente de "Deuda por
+  // cliente" filtra la tabla de detalle de abajo. `debtorsFilterCustomer` es
+  // un estado de módulo simple, igual que financeSubTab/purchasesSubTab.
+  const filteredPending = debtorsFilterCustomer ? pendingBU.filter(s => s.customer_id === debtorsFilterCustomer) : pendingBU;
+
   el.innerHTML = `
     <div class="kpi-row">
       <div class="kpi"><div class="kpi-label">Total adeudado</div><div class="kpi-value expense">$ ${fmtMoney(totalDebt)}</div></div>
@@ -3071,17 +3172,19 @@ async function renderDebtors() {
 
     <div class="card">
       <div class="card-title">Deuda por cliente</div>
-      ${tableOrEmpty(groups, ['Cliente', 'Facturas', 'Deuda total'], (g) => `
-        <tr>
-          <td>${customerName(g.customer_id)}</td>
+      <div class="hint" style="margin-bottom:10px">Clic en un cliente para ver solo sus facturas abajo.</div>
+      ${tableOrEmpty(groups, ['Cliente', 'Facturas', 'Deuda total', ''], (g) => `
+        <tr class="${debtorsFilterCustomer === g.customer_id ? 'row-flash' : ''}">
+          <td style="cursor:pointer" onclick="setDebtorsFilter(${g.customer_id})">${customerName(g.customer_id)}</td>
           <td class="mono">${g.sales.length}</td>
           <td class="num expense">$ ${fmtMoney(g.total)}</td>
+          <td><button class="btn btn-sm" onclick="showContactStatement('customer', ${g.customer_id}, '${customerName(g.customer_id).replace(/'/g, "\\'")}')">Cuenta corriente</button></td>
         </tr>`, 'No hay deuda pendiente en esta unidad.')}
     </div>
 
     <div class="card">
-      <div class="card-title">Detalle de facturas pendientes</div>
-      ${tableOrEmpty(pendingBU, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
+      <div class="card-title">Detalle de facturas pendientes${debtorsFilterCustomer ? ` — ${customerName(debtorsFilterCustomer)} <button class="btn btn-sm" style="margin-left:8px" onclick="setDebtorsFilter(null)">Ver todas</button>` : ''}</div>
+      ${tableOrEmpty(filteredPending, ['#', 'Cliente', 'CUIT', 'Fecha', 'Total', 'Cobrado', 'Pendiente', 'Estado', ''], (s) => `
         <tr>
           <td class="mono">#${s.id}</td>
           <td>${customerName(s.customer_id)}</td>
@@ -3099,6 +3202,107 @@ async function renderDebtors() {
     </div>
   `;
 }
+
+// ---------------------------------------------------------
+// A PAGAR (Roadmap Etapa 5 — simétrica a Deudores, del lado de Compras).
+// Reutiliza /purchases/pending-payment, que ya existía (la misma vista que
+// usa la pestaña "Procesar pago" de Compras) — sin endpoint nuevo.
+// ---------------------------------------------------------
+let payablesFilterSupplier = null;
+function setPayablesFilter(supplierId) { payablesFilterSupplier = supplierId; renderView(); }
+
+async function renderPayables() {
+  document.getElementById('viewActions').innerHTML = '';
+  const el = document.getElementById('view');
+  const pending = await api('/purchases/pending-payment');
+  const pendingBU = pending.filter(p => p.business_unit_id === state.selectedBU);
+
+  const bySupplier = {};
+  pendingBU.forEach(p => {
+    const supId = p.supplier_id;
+    if (!bySupplier[supId]) bySupplier[supId] = { supplier_id: supId, purchases: [], total: 0 };
+    bySupplier[supId].purchases.push(p);
+    bySupplier[supId].total += Number(p.remaining_amount);
+  });
+  const groups = Object.values(bySupplier);
+  const totalDebt = pendingBU.reduce((a, p) => a + Number(p.remaining_amount), 0);
+  const filteredPending = payablesFilterSupplier ? pendingBU.filter(p => p.supplier_id === payablesFilterSupplier) : pendingBU;
+
+  el.innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Total a pagar</div><div class="kpi-value expense">$ ${fmtMoney(totalDebt)}</div></div>
+      <div class="kpi"><div class="kpi-label">Proveedores</div><div class="kpi-value">${groups.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Compras pendientes</div><div class="kpi-value">${pendingBU.length}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Deuda por proveedor</div>
+      <div class="hint" style="margin-bottom:10px">Clic en un proveedor para ver solo sus compras abajo.</div>
+      ${tableOrEmpty(groups, ['Proveedor', 'Compras', 'Deuda total', ''], (g) => `
+        <tr class="${payablesFilterSupplier === g.supplier_id ? 'row-flash' : ''}">
+          <td style="cursor:pointer" onclick="setPayablesFilter(${g.supplier_id})">${supplierName(g.supplier_id)}</td>
+          <td class="mono">${g.purchases.length}</td>
+          <td class="num expense">$ ${fmtMoney(g.total)}</td>
+          <td><button class="btn btn-sm" onclick="showContactStatement('supplier', ${g.supplier_id}, '${supplierName(g.supplier_id).replace(/'/g, "\\'")}')">Cuenta corriente</button></td>
+        </tr>`, 'No hay deuda pendiente con proveedores en esta unidad.')}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Detalle de compras pendientes${payablesFilterSupplier ? ` — ${supplierName(payablesFilterSupplier)} <button class="btn btn-sm" style="margin-left:8px" onclick="setPayablesFilter(null)">Ver todas</button>` : ''}</div>
+      ${tableOrEmpty(filteredPending, ['#', 'Proveedor', 'Fecha', 'Total', 'Pagado', 'Pendiente', 'Estado', ''], (p) => `
+        <tr>
+          <td class="mono">#${p.id}</td>
+          <td>${supplierName(p.supplier_id)}</td>
+          <td class="mono">${fmtDate(p.date)}</td>
+          <td class="num">$ ${fmtMoney(p.total_amount)}</td>
+          <td class="num income">$ ${fmtMoney(p.settled_amount)}</td>
+          <td class="num expense">$ ${fmtMoney(p.remaining_amount)}</td>
+          <td>${paymentStatusBadge(p.payment_status)}</td>
+          <td>
+            <button class="btn btn-sm" onclick="showPurchaseDetail(${p.id})">Detalle</button>
+            <button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${p.remaining_amount})">Procesar pago</button>
+          </td>
+        </tr>`, 'No hay compras pendientes de pago en esta unidad.')}
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------
+// CUENTA CORRIENTE por cliente/proveedor (Roadmap Etapa 5). Reutiliza
+// exactamente los mismos campos (total_amount/settled_amount por operación)
+// que ya se muestran en Deudores/A pagar y en Compras — así el saldo acá
+// siempre coincide con el que ya se ve en el resto del ERP, no hay un
+// cálculo nuevo y distinto flotando por otro lado.
+// ---------------------------------------------------------
+async function showContactStatement(kind, id, name) {
+  const isCustomer = kind === 'customer';
+  const rows = await api(`/${isCustomer ? 'customers' : 'suppliers'}/${id}/statement`).catch(() => null);
+  if (!rows) { toast('No se pudo cargar la cuenta corriente.', 'error'); return; }
+
+  let running = 0;
+  const withBalance = rows.map(r => {
+    running += Number(r.total_amount) - Number(r.settled_amount || 0);
+    return { ...r, running };
+  });
+  const total = withBalance.length ? withBalance[withBalance.length - 1].running : 0;
+
+  openModal(`
+    <h2>Cuenta corriente — ${escAttr(name)}</h2>
+    <div class="hint" style="margin-bottom:14px">Saldo actual: <strong class="${total > 0.01 ? 'expense' : ''}">$ ${fmtMoney(total)}</strong> ${isCustomer ? '— es lo que te debe' : '— es lo que le debés'}</div>
+    ${tableOrEmpty(withBalance, ['#', 'Fecha', 'Unidad', 'Debe', 'Haber', 'Saldo', ''], (r) => `
+      <tr>
+        <td class="mono">#${r.id}</td>
+        <td class="mono">${fmtDateShort(r.date)}</td>
+        <td>${r.business_unit_name}</td>
+        <td class="num expense">$ ${fmtMoney(r.total_amount)}</td>
+        <td class="num income">$ ${fmtMoney(r.settled_amount || 0)}</td>
+        <td class="num">$ ${fmtMoney(r.running)}</td>
+        <td><button class="btn btn-sm" onclick="${isCustomer ? `showSaleDetail(${r.id})` : `showPurchaseDetail(${r.id})`}">Detalle</button></td>
+      </tr>`, isCustomer ? 'Este cliente no tiene ventas registradas.' : 'Este proveedor no tiene compras registradas.')}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
+
 async function showSaleDetail(saleId) {
   const [items, full] = await Promise.all([
     api(`/sales/${saleId}/items`),

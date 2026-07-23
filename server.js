@@ -482,6 +482,22 @@ app.delete('/suppliers/:id', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+// (Roadmap Etapa 5) Cuenta corriente de proveedor — mismo criterio que
+// /customers/:id/statement de arriba.
+app.get('/suppliers/:id/statement', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await pool.query(`
+      SELECT p.id, p.date, p.total_amount, p.settled_amount, p.status, p.business_unit_id, bu.name AS business_unit_name
+      FROM purchase p JOIN business_unit bu ON bu.id = p.business_unit_id
+      WHERE p.supplier_id=$1 AND p.deleted_at IS NULL AND p.status <> 'CANCELLED'
+      ORDER BY p.date ASC, p.id ASC
+    `, [id]);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 app.post('/suppliers/bulk-import', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -563,6 +579,24 @@ app.delete('/customers/:id', async (req, res) => {
   try {
     await pool.query('UPDATE customer SET deleted_at=now() WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+// (Roadmap Etapa 5) Cuenta corriente: historial de ventas de este cliente con
+// saldo corriendo. Usa total_amount/settled_amount por venta — los mismos
+// campos que ya muestra Deudores — para que el saldo de acá siempre coincida
+// con lo que ya se ve en la lista de Clientes (no se inventa un cálculo nuevo).
+app.get('/customers/:id/statement', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await pool.query(`
+      SELECT s.id, s.date, s.total_amount, s.settled_amount, s.status, s.business_unit_id, bu.name AS business_unit_name
+      FROM sale s JOIN business_unit bu ON bu.id = s.business_unit_id
+      WHERE s.customer_id=$1 AND s.deleted_at IS NULL AND s.status <> 'CANCELLED'
+      ORDER BY s.date ASC, s.id ASC
+    `, [id]);
+    res.json(r.rows);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -1777,6 +1811,55 @@ app.post('/shipments', async (req, res) => {
   }
 });
 
+// (Roadmap Etapa 4) Edición completa de un remito: solo mientras está PENDING
+// (Confirmar mueve stock, no se puede editar después sin revertirlo antes con
+// Cancelar). Mismo patrón que PUT /quotes/:id de arriba. No toca
+// carrier/delivery_address: esos se editan aparte, en /shipments/:id/transport.
+app.put('/shipments/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { customer_id, warehouse_id, project_id, reason, notes, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT * FROM shipment WHERE id=$1 FOR UPDATE', [id]);
+    const before = beforeR.rows[0];
+    if (!before) throw new Error('Remito no encontrado.');
+    if (before.status !== 'PENDING') throw new Error('Solo se puede editar un remito mientras está pendiente.');
+    const beforeItemsR = await client.query('SELECT article_id, quantity FROM shipment_item WHERE shipment_id=$1', [id]);
+
+    await client.query(
+      `UPDATE shipment SET customer_id=$1, warehouse_id=$2, project_id=$3, reason=$4, notes=$5 WHERE id=$6`,
+      [customer_id, warehouse_id, project_id || null, reason || 'PRESTAMO', notes || null, id]
+    );
+
+    await client.query('DELETE FROM shipment_item WHERE shipment_id=$1', [id]);
+    for (const item of items) {
+      await client.query(
+        'INSERT INTO shipment_item (shipment_id, article_id, quantity) VALUES ($1,$2,$3)',
+        [id, item.article_id, item.quantity]
+      );
+    }
+
+    const afterR = await client.query('SELECT * FROM shipment WHERE id=$1', [id]);
+    await logAudit(client, {
+      tableName: 'shipment', recordId: Number(id), action: 'EDIT',
+      oldValues: { ...before, items: beforeItemsR.rows },
+      newValues: { ...afterR.rows[0], items },
+      userId: req.user.id,
+    });
+
+    await client.query('COMMIT');
+    res.json(afterR.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.put('/shipments/:id/transport', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1854,8 +1937,13 @@ app.get('/quotes/list', async (req, res) => {
     `SELECT COUNT(*) FROM quote q JOIN customer c ON c.id = q.customer_id ${where}`,
     values
   );
+  // (Roadmap Etapa 4) LEFT JOIN a sale para exponer qué venta generó este
+  // presupuesto (sale.quote_id ya se guardaba desde antes en POST /sales —
+  // acá solo se expone para mostrar "Ver venta #X" en la lista).
   const rowsR = await pool.query(
-    `SELECT q.* FROM quote q JOIN customer c ON c.id = q.customer_id
+    `SELECT q.*, s.id AS converted_sale_id FROM quote q
+     JOIN customer c ON c.id = q.customer_id
+     LEFT JOIN sale s ON s.quote_id = q.id AND s.deleted_at IS NULL
      ${where} ORDER BY q.id DESC LIMIT $${i} OFFSET $${i + 1}`,
     [...values, pageSize, offset]
   );
@@ -1893,6 +1981,55 @@ app.post('/quotes', async (req, res) => {
     await client.query('COMMIT');
     const full = await pool.query('SELECT * FROM quote WHERE id=$1', [quote.id]);
     res.json(full.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// (Roadmap Etapa 4) Edición completa de un presupuesto: solo mientras está
+// PENDING (una vez CONVERTED ya generó una venta real, y CANCELLED ya no
+// aplica). Mismo patrón que PUT /purchases/:id (Bloque 2): reemplaza las
+// líneas, deja registro en audit_log.
+app.put('/quotes/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { customer_id, warehouse_id, project_id, currency, notes, items } = req.body;
+    if (!items || !items.length) throw new Error('Agregá al menos un artículo.');
+
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT * FROM quote WHERE id=$1 FOR UPDATE', [id]);
+    const before = beforeR.rows[0];
+    if (!before) throw new Error('Presupuesto no encontrado.');
+    if (before.status !== 'PENDING') throw new Error('Solo se puede editar un presupuesto mientras está pendiente.');
+    const beforeItemsR = await client.query('SELECT article_id, quantity, unit_price FROM quote_item WHERE quote_id=$1', [id]);
+
+    await client.query(
+      `UPDATE quote SET customer_id=$1, warehouse_id=$2, project_id=$3, currency=$4, notes=$5 WHERE id=$6`,
+      [customer_id, warehouse_id || null, project_id || null, currency || 'ARS', notes || null, id]
+    );
+
+    await client.query('DELETE FROM quote_item WHERE quote_id=$1', [id]);
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO quote_item (quote_id, article_id, quantity, unit_price) VALUES ($1,$2,$3,$4)`,
+        [id, item.article_id, item.quantity, item.unit_price]
+      );
+    }
+
+    const afterR = await client.query('SELECT * FROM quote WHERE id=$1', [id]);
+    await logAudit(client, {
+      tableName: 'quote', recordId: Number(id), action: 'EDIT',
+      oldValues: { ...before, items: beforeItemsR.rows },
+      newValues: { ...afterR.rows[0], items },
+      userId: req.user.id,
+    });
+
+    await client.query('COMMIT');
+    res.json(afterR.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
