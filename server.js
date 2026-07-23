@@ -712,7 +712,12 @@ app.post('/articles', async (req, res) => {
   );
   res.json(r.rows[0]);
 });
+// (Roadmap Etapa 10, hallazgo #30) reutiliza la misma infraestructura de
+// auditoría que ya usan Ventas/Compras/Presupuestos/Remitos (logAudit +
+// tabla audit_log, sin cambios de esquema) — antes un cambio de precio en un
+// artículo no quedaba registrado en ningún lado.
 app.put('/articles/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
     const {
@@ -721,7 +726,9 @@ app.put('/articles/:id', async (req, res) => {
       list_cost_usd, shipping_margin_pct_usd, fx_margin_pct_usd, profit_margin_pct_usd, iva_pct_usd,
       price_ars, price_usd,
     } = req.body;
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const beforeR = await client.query('SELECT * FROM article WHERE id=$1', [id]);
+    const r = await client.query(
       `UPDATE article SET code=$1, alt_code=$2, description=$3, notes=$4,
          list_cost_ars=$5, shipping_margin_pct_ars=$6, fx_margin_pct_ars=$7, profit_margin_pct_ars=$8, iva_pct_ars=$9,
          list_cost_usd=$10, shipping_margin_pct_usd=$11, fx_margin_pct_usd=$12, profit_margin_pct_usd=$13, iva_pct_usd=$14,
@@ -734,9 +741,19 @@ app.put('/articles/:id', async (req, res) => {
         price_ars || null, price_usd || null, id,
       ]
     );
+    if (beforeR.rows[0]) {
+      await logAudit(client, {
+        tableName: 'article', recordId: Number(id), action: 'EDIT',
+        oldValues: beforeR.rows[0], newValues: r.rows[0], userId: req.user.id,
+      });
+    }
+    await client.query('COMMIT');
     res.json(r.rows[0]);
   } catch (e) {
+    await client.query('ROLLBACK');
     res.status(400).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 app.get('/articles', async (req, res) => {

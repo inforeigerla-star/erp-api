@@ -141,6 +141,20 @@ async function doLogin() {
     errEl.textContent = 'No se pudo conectar con el servidor.';
   }
 }
+// (Roadmap Etapa 10, hallazgo #4) sin infraestructura de email en este
+// proyecto (no hay servicio de envío configurado), un flujo real de "olvidé
+// mi contraseña" autoservicio quedaría sin poder probarse de punta a punta y
+// suma superficie de ataque (endpoint público que confirma si un usuario
+// existe). Se optó por la alternativa que la propia auditoría ofrecía como
+// mínimo viable: dejar documentado y a la vista el procedimiento manual, que
+// ya existe (Usuarios → Editar → "Nueva contraseña", ver openEditUserModal).
+function showForgotPasswordInfo() {
+  openModal(`
+    <h2>¿Olvidaste tu contraseña?</h2>
+    <div class="hint">Por seguridad, este sistema no envía la contraseña por correo. Pedile a un administrador que te la restablezca: Usuarios → buscá tu usuario → Editar → completá "Nueva contraseña".</div>
+    <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Entendido</button></div>
+  `);
+}
 function doLogout() {
   clearToken();
   state.currentUser = null;
@@ -225,9 +239,9 @@ function closeModal() {
   _draftAutosaveKind = null;
 }
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.getElementById('modalBackdrop').classList.contains('show')) {
-    closeModal();
-  }
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('modalBackdrop').classList.contains('show')) { closeModal(); return; }
+  closeMobileSidebar();
 });
 
 // ---------------------------------------------------------
@@ -372,8 +386,23 @@ const viewTitles = {
 };
 
 document.querySelectorAll('.nav-item').forEach(btn => {
-  btn.addEventListener('click', () => goToView(btn.dataset.view));
+  btn.addEventListener('click', () => { goToView(btn.dataset.view); closeMobileSidebar(); });
 });
+
+// (Roadmap Etapa 10, hallazgo #35) menú lateral colapsable para pantallas
+// chicas (celular/tablet) — reutiliza la misma barra lateral de siempre, solo
+// le suma la clase .mobile-open (ver @media en styles.css). Antes, por debajo
+// de 860px de ancho, la barra lateral directamente desaparecía sin ningún
+// reemplazo: no había forma de cambiar de pantalla, de unidad de negocio, ni
+// de cerrar sesión desde un celular.
+function toggleMobileSidebar() {
+  document.querySelector('.sidebar')?.classList.toggle('mobile-open');
+  document.getElementById('mobileSidebarBackdrop')?.classList.toggle('show');
+}
+function closeMobileSidebar() {
+  document.querySelector('.sidebar')?.classList.remove('mobile-open');
+  document.getElementById('mobileSidebarBackdrop')?.classList.remove('show');
+}
 
 // Navega a una vista programáticamente (misma lógica que el click de la nav
 // lateral). `afterRender` es opcional: se ejecuta una vez que la vista ya
@@ -382,6 +411,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
 function goToView(viewName, afterRender) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
   state.view = viewName;
+  closeMobileSidebar();
   const p = renderView();
   if (afterRender) p.then(afterRender);
 }
@@ -595,7 +625,37 @@ document.addEventListener('keydown', (e) => {
     cycleBusinessUnit(e.key === ']' ? 1 : -1);
     return;
   }
+  if (e.key === '?') {
+    e.preventDefault();
+    showKeyboardShortcuts();
+    return;
+  }
 });
+
+// (Roadmap Etapa 10, hallazgo #8) los atajos ya existían (Bloque 2 de la
+// etapa de optimización UX, sección 13) pero no estaban documentados en
+// ningún lugar visible de la app — se agrega este modal de referencia,
+// accesible con el ícono "?" del topbar o la tecla "?".
+function showKeyboardShortcuts() {
+  const shortcuts = [
+    ['/', 'Buscar en la lista de la pantalla actual (si tiene buscador)'],
+    ['N', 'Nueva venta / nueva compra (estando en esas pantallas)'],
+    ['[ ]', 'Unidad de negocio anterior / siguiente'],
+    ['↑ ↓ Enter', 'Elegir un resultado en cualquier buscador (artículos, buscador global, selectores)'],
+    ['Esc', 'Cerrar la ventana emergente actual'],
+    ['?', 'Mostrar esta ayuda'],
+  ];
+  openModal(`
+    <h2>Atajos de teclado</h2>
+    <table class="ledger">
+      <tbody>
+        ${shortcuts.map(([key, desc]) => `<tr><td class="mono" style="width:120px"><kbd>${key}</kbd></td><td>${desc}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="hint" style="margin-top:10px">No funcionan mientras estás escribiendo en un campo de texto, ni con una ventana emergente abierta (salvo Esc).</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
 
 // ---------------------------------------------------------
 // DASHBOARD
@@ -1431,6 +1491,10 @@ async function openEditArticleModal(articleId) {
   openModal(`
     <h2>Editar artículo</h2>
     ${articleFormHtml(a)}
+    <div style="margin-top:6px">
+      <button class="btn btn-sm" onclick="toggleAuditHistory('article', ${a.article_id})">Ver historial de cambios</button>
+      <div id="auditHistoryBox" style="display:none;margin-top:10px"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="submitEditArticle(${a.article_id})">Guardar</button>
