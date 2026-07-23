@@ -298,7 +298,7 @@ function cycleBusinessUnit(direction) {
 }
 
 const BU_THEME = {
-  reiger: { logo: 'assets/icons/reiger.png', accent: '#B9006E' },
+  reiger: { logo: 'assets/icons/reiger.png', accent: '#9E1C74' },
   endless: { logo: 'assets/icons/endless.png', accent: '#B89B2E' },
   sadev: { logo: 'assets/icons/sadev.png', accent: '#3E7CD6' },
   peugeot: { logo: 'assets/icons/peugeot.png', accent: '#8A8A8A' },
