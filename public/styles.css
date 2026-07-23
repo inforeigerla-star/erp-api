@@ -24,6 +24,13 @@
 
 * { box-sizing: border-box; }
 
+/* Set de íconos SVG inline (Etapa 7 del roadmap, hallazgo #33 — reemplaza
+   los emojis usados como iconografía funcional para verse igual en
+   cualquier sistema operativo/navegador). Tamaño/color por defecto pensado
+   para vivir al lado de texto de botones y links; los contextos que
+   necesitan un ícono más grande (avisos, tiles de caja) lo sobreescriben. */
+.icon { vertical-align: -2px; flex-shrink: 0; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -104,17 +111,26 @@ button, input, select { font-family: inherit; font-size: inherit; }
   width: 100%;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
+  border-left: 3px solid var(--bu-accent, rgba(255,255,255,0.1));
   color: #F6F6F7;
-  padding: 9px 11px;
+  padding: 9px 30px 9px 11px;
   border-radius: 7px;
   font-weight: 500;
   font-family: var(--sans);
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path d='M5 8l5 5 5-5' fill='none' stroke='%23F6F6F7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 14px;
+  transition: border-color 0.15s;
 }
 #buSelect option {
   background: #1C1C1F;
   color: #F6F6F7;
 }
+#buSelect:hover { border-color: rgba(255,255,255,0.22); }
 #buSelect:focus { outline: none; border-color: rgba(255,255,255,0.3); }
 
 .nav { flex: 1; overflow-y: auto; }
@@ -367,6 +383,7 @@ table.ledger tr:hover td { background: #FAFAFA; }
    ninguna columna ni funcionalidad de orden. */
 .dense-table th { padding: 8px 8px; font-size: 10px; }
 .dense-table td { padding: 9px 8px; font-size: 12.5px; }
+.hide-cost-cols .cost-col { display: none; }
 
 /* Menú "⋮" de acciones por fila: agrupa las acciones menos frecuentes para
    no competir por espacio con los botones principales de la fila. */
@@ -425,6 +442,8 @@ table.ledger tr:hover td { background: #FAFAFA; }
 .badge-pending { background: #F0F0F1; color: #4A4A4E; border: 1px solid var(--border); }
 .badge-confirmed { background: var(--ink); color: #fff; }
 .badge-cancelled { background: var(--danger-soft); color: var(--danger); }
+.badge-kind-sale { background: #E3EFE7; color: #2F6F4E; border: 1px solid #C9E0D0; }
+.badge-kind-purchase { background: #FDEEDC; color: #B5651D; border: 1px solid #F5D9B5; }
 
 /* ---------- MODAL ---------- */
 .modal-backdrop {
@@ -583,7 +602,8 @@ table.ledger tr:hover td { background: #FAFAFA; }
   box-shadow: var(--shadow-lg);
   text-align: center;
 }
-.stock-warning-icon { font-size: 34px; margin-bottom: 8px; }
+.stock-warning-icon { font-size: 34px; margin-bottom: 8px; color: #E8A100; }
+.stock-warning-icon .icon { width: 30px; height: 30px; }
 .stock-warning-title { font-size: 17px; font-weight: 700; color: #8A5700; margin-bottom: 10px; }
 .stock-warning-text { font-size: 13.5px; color: #4A3200; line-height: 1.5; margin-bottom: 20px; }
 .stock-warning-actions { display: flex; justify-content: center; gap: 10px; }
@@ -610,7 +630,8 @@ table.ledger tr:hover td { background: #FAFAFA; }
   box-shadow: var(--shadow-lg);
   text-align: center;
 }
-.danger-confirm-icon { font-size: 34px; margin-bottom: 8px; }
+.danger-confirm-icon { font-size: 34px; margin-bottom: 8px; color: var(--danger); }
+.danger-confirm-icon .icon { width: 30px; height: 30px; }
 .danger-confirm-title { font-size: 17px; font-weight: 700; color: var(--danger); margin-bottom: 10px; }
 .danger-confirm-text { font-size: 13.5px; color: #4A2020; line-height: 1.5; margin-bottom: 20px; }
 .danger-confirm-actions { display: flex; justify-content: center; gap: 10px; }
@@ -776,6 +797,7 @@ table.ledger tr:hover td { background: #FAFAFA; }
   object-fit: contain;
 }
 .cashbox-tile-emoji { font-size: 22px; }
+.cashbox-tile-emoji .icon { width: 19px; height: 19px; vertical-align: -4px; }
 .cashbox-tile-name {
   font-size: 12px;
   font-weight: 600;

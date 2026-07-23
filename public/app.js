@@ -71,6 +71,23 @@ function daysSince(value) {
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
 }
 
+// (Roadmap Etapa 7, hallazgo #33) Set chico de íconos SVG inline, sin
+// dependencias externas, para reemplazar los emojis usados como iconografía
+// funcional (se ven distinto según sistema operativo/navegador). El "⋮" del
+// menú de acciones por fila no se toca: ya es un patrón consistente propio.
+const SVG_ICONS = {
+  warning: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 3.2 2 17h16L10 3.2Z" stroke-linejoin="round"/><path d="M10 8.2v3.6" stroke-linecap="round"/><circle cx="10" cy="14.3" r="0.9" fill="currentColor" stroke="none"/></svg>',
+  print: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 7V3.3h9V7" stroke-linejoin="round"/><rect x="3" y="7" width="14" height="6.5" rx="1"/><path d="M5.5 12.5h9v4.2h-9z" stroke-linejoin="round"/></svg>',
+  whatsapp: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3.2a6.8 6.8 0 0 0-5.8 10.3L3 17l3.6-1.1A6.8 6.8 0 1 0 10 3.2Z" stroke-linejoin="round"/><path d="M7 8.6c0 2.7 1.7 4.4 4.3 4.4" stroke-linecap="round"/></svg>',
+  mail: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M4 6.3 10 11l6-4.7" stroke-linejoin="round"/></svg>',
+  note: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 3h6l3 3v11h-9V3Z" stroke-linejoin="round"/><path d="M11.5 3v3h3" stroke-linejoin="round"/><path d="M7.5 10h5M7.5 13h5" stroke-linecap="round"/></svg>',
+  dollar: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.3v15.4M13.3 5.6c0-1.4-1.5-2.3-3.3-2.3s-3.3 1-3.3 2.4c0 1.4 1.5 2 3.3 2.3 1.8.3 3.3 1 3.3 2.4 0 1.4-1.5 2.4-3.3 2.4s-3.3-.9-3.3-2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  cash: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5.5" width="15" height="9" rx="1.5"/><circle cx="10" cy="10" r="2"/></svg>',
+  chart: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 16 7.5 10l3 3L17 5.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  wrench: '<svg class="icon" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.8 3.3a3.3 3.3 0 0 0-4.4 4l-6 6 2 2 6-6a3.3 3.3 0 0 0 4-4.4l-2.2 2.2-1.6-1.6 2.2-2.2Z" stroke-linejoin="round"/></svg>',
+};
+function svgIcon(name) { return SVG_ICONS[name] || ''; }
+
 // ---------------------------------------------------------
 // Auth
 // ---------------------------------------------------------
@@ -720,7 +737,7 @@ async function renderDashboard() {
       <div class="card-title">Últimas operaciones</div>
       ${tableOrEmpty(d.recentOperations, ['Tipo', 'Fecha', 'Estado', 'Total'], (o) => `
         <tr>
-          <td>${o.kind}</td>
+          <td><span class="badge ${o.kind === 'Venta' ? 'badge-kind-sale' : 'badge-kind-purchase'}">${o.kind}</span></td>
           <td class="mono">${fmtDate(o.date)}</td>
           <td>${statusBadge(o.status)}</td>
           <td class="num">$ ${fmtMoney(o.total_amount)}</td>
@@ -816,7 +833,7 @@ async function renderStock() {
           <td class="mono">${s.code}</td>
           <td>${s.description}</td>
           <td>${s.warehouse_name}</td>
-          <td class="num" style="${Number(s.quantity) < 0 ? 'color:#C9820A;font-weight:700' : ''}">${Number(s.quantity) < 0 ? '⚠️ ' : ''}${fmtQty(s.quantity)}</td>
+          <td class="num" style="${Number(s.quantity) < 0 ? 'color:#C9820A;font-weight:700' : ''}">${Number(s.quantity) < 0 ? svgIcon('warning') + ' ' : ''}${fmtQty(s.quantity)}</td>
           <td style="text-align:right;white-space:nowrap">
             <button class="btn btn-sm" onclick="quickAddStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Agregar unidades</button>
             <button class="btn btn-sm btn-danger" onclick="quickRemoveStock(${s.article_id}, ${s.warehouse_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity})">Quitar unidades</button>
@@ -886,6 +903,7 @@ function openStockAdjustModal() {
   const whItems = warehouseItemsList();
   openModal(`
     <h2>Ajustar stock</h2>
+    <p class="hint">Para un artículo o depósito puntual sin tener la fila a la vista. Si ya ves la fila en la lista, usá "Agregar unidades"/"Quitar unidades" ahí mismo — es más rápido.</p>
     <div class="field"><label>Artículo</label>${searchableSelectHtml('adjust_article', artItems, 'Buscar artículo…')}</div>
     <div class="field-row">
       <div class="field"><label>Depósito</label>${searchableSelectHtml('adjust_warehouse', whItems, 'Buscar depósito…')}</div>
@@ -904,14 +922,18 @@ function openStockAdjustModal() {
   `);
 }
 async function submitStockAdjust() {
+  const qty = Number(document.getElementById('f_adjust_qty').value);
+  if (!(qty > 0)) { toast('Ingresá una cantidad válida.', 'error'); return; }
+  const type = document.getElementById('f_adjust_type').value;
+  if (!(await verifyPasswordPrompt(type === 'IN' ? 'agregar unidades de stock' : 'quitar unidades de stock'))) return;
   try {
     await api('/stock/adjust', {
       method: 'POST',
       body: JSON.stringify({
         article_id: Number(getSearchableValue('adjust_article')),
         warehouse_id: Number(getSearchableValue('adjust_warehouse')),
-        quantity: Number(document.getElementById('f_adjust_qty').value),
-        type: document.getElementById('f_adjust_type').value,
+        quantity: qty,
+        type,
       }),
     });
     closeModal();
@@ -1026,9 +1048,18 @@ async function deleteStockMovement(id, articleId, name) {
 // ---------------------------------------------------------
 let articlesPage = 1;
 let articlesSearch = '';
+// (Roadmap Etapa 7, hallazgo #36) preferencia persistida en localStorage,
+// mismo criterio que el resto de las preferencias de pantalla (erp_pref_*).
+let articlesSimpleView = localStorage.getItem('erp_articles_simple_view') === '1';
+function toggleArticlesSimpleView() {
+  articlesSimpleView = !articlesSimpleView;
+  localStorage.setItem('erp_articles_simple_view', articlesSimpleView ? '1' : '0');
+  renderView();
+}
 
 async function renderArticles() {
   document.getElementById('viewActions').innerHTML = `
+    <button class="btn btn-sm" onclick="toggleArticlesSimpleView()">${articlesSimpleView ? 'Vista completa' : 'Vista simple'}</button>
     <button class="btn btn-sm" onclick="downloadImportTemplate('articles')">Plantilla Excel</button>
     <button class="btn btn-sm" onclick="triggerImport('articles')">Importar Excel</button>
     <button class="btn btn-sm btn-danger" id="bulkDeleteArticlesBtn" style="display:none" onclick="bulkDeleteArticles()">Eliminar seleccionados</button>
@@ -1049,16 +1080,16 @@ async function renderArticles() {
           ${articlesSearch ? `<button class="btn btn-sm" onclick="articlesClearSearch()">Limpiar</button>` : ''}
         </div>
       </div>
-      <table class="ledger sortable-table dense-table">
+      <table class="ledger sortable-table dense-table${articlesSimpleView ? ' hide-cost-cols' : ''}">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="selectAllArticles" onchange="toggleAllArticleChecks(this)"></th>
           ${[
-            ['Código', ''], ['Cód. alt.', ''], ['Descripción', ''],
-            ['Costo ARS', ''], ['P.ARS s/IVA', 'Precio ARS sin IVA'], ['P.ARS c/IVA', 'Precio ARS con IVA'],
-            ['Costo USD', ''], ['P.USD s/IVA', 'Precio USD sin IVA'], ['P.USD c/IVA', 'Precio USD con IVA'],
-            ['Obs.', ''], ['', ''],
-          ].map(([h, title]) => h
-            ? `<th class="sortable-th" onclick="sortTableByColumn(this)" data-dir="" ${title ? `title="${title}"` : ''}>${h}<span class="sort-indicator"></span></th>`
+            ['Código', '', false], ['Cód. alt.', '', false], ['Descripción', '', false],
+            ['Costo ARS', '', true], ['P.ARS s/IVA', 'Precio ARS sin IVA', true], ['P.ARS c/IVA', 'Precio ARS con IVA', false],
+            ['Costo USD', '', true], ['P.USD s/IVA', 'Precio USD sin IVA', true], ['P.USD c/IVA', 'Precio USD con IVA', false],
+            ['Obs.', '', false], ['', '', false],
+          ].map(([h, title, isCost]) => h
+            ? `<th class="sortable-th${isCost ? ' cost-col' : ''}" onclick="sortTableByColumn(this)" data-dir="" ${title ? `title="${title}"` : ''}>${h}<span class="sort-indicator"></span></th>`
             : `<th></th>`).join('')}
         </tr></thead>
         <tbody>
@@ -1068,13 +1099,13 @@ async function renderArticles() {
               <td class="mono">${a.code}</td>
               <td class="mono">${a.alt_code || '-'}</td>
               <td>${a.description}</td>
-              <td class="num">$ ${fmtMoney(a.list_cost_ars)}</td>
-              <td class="num income">${articlePriceDisplay(a, 'ARS', false)}</td>
+              <td class="num cost-col">$ ${fmtMoney(a.list_cost_ars)}</td>
+              <td class="num income cost-col">${articlePriceDisplay(a, 'ARS', false)}</td>
               <td class="num income">${articlePriceDisplay(a, 'ARS', true)}</td>
-              <td class="num">US$ ${fmtMoney(a.list_cost_usd)}</td>
-              <td class="num income">${articlePriceDisplay(a, 'USD', false)}</td>
+              <td class="num cost-col">US$ ${fmtMoney(a.list_cost_usd)}</td>
+              <td class="num income cost-col">${articlePriceDisplay(a, 'USD', false)}</td>
               <td class="num income">${articlePriceDisplay(a, 'USD', true)}</td>
-              <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? '📝' : '-'}</td>
+              <td style="text-align:center" title="${(a.notes || '').replace(/"/g, '&quot;')}">${a.notes ? svgIcon('note') : '-'}</td>
               <td>
                 <button class="btn btn-sm" onclick="openEditArticleModal(${a.article_id})">Editar</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteArticle(${a.article_id}, '${a.code}')">Eliminar</button>
@@ -1183,6 +1214,7 @@ function articlePriceDisplay(a, targetCurrency, withIva) {
 
 async function deleteArticle(id, code) {
   if (!confirm(`¿Eliminar el artículo ${code}? Esta acción no se puede deshacer.`)) return;
+  if (!(await verifyPasswordPrompt(`eliminar el artículo ${code}`))) return;
   try {
     await api(`/articles/${id}`, { method: 'DELETE' });
     toast('Artículo eliminado.');
@@ -1453,20 +1485,35 @@ async function submitEditWarehouse(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+let _whDetailRows = [];
+let _whDetailWarehouseId = null;
+let _whDetailName = '';
+
 async function showWarehouseDetail(warehouseId, name) {
   const stock = await api('/stock');
-  const rows = stock.filter(s => s.warehouse_id === warehouseId);
+  _whDetailRows = stock.filter(s => s.warehouse_id === warehouseId);
+  _whDetailWarehouseId = warehouseId;
+  _whDetailName = name;
   openModal(`
     <h2>Depósito — ${name}</h2>
-    ${tableOrEmpty(rows, ['Código', 'Artículo', 'Cantidad', ''], (s) => `
+    ${_whDetailRows.length > 8 ? `<div class="field"><input type="text" id="whDetailFilter" placeholder="Buscar por código o descripción…" oninput="filterWarehouseDetail()"></div>` : ''}
+    <div id="whDetailTableWrap">${renderWarehouseDetailTable(_whDetailRows, false)}</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `);
+}
+function renderWarehouseDetailTable(rows, filtered) {
+  return tableOrEmpty(rows, ['Código', 'Artículo', 'Cantidad', ''], (s) => `
       <tr>
         <td class="mono">${s.code}</td>
         <td>${s.description}</td>
         <td class="num" id="wh_qty_${s.article_id}">${fmtQty(s.quantity)}</td>
-        <td><button class="btn btn-sm" onclick="editWarehouseStock(${warehouseId}, ${s.article_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity}, '${name.replace(/'/g, "\\'")}')">Editar</button></td>
-      </tr>`, 'Este depósito no tiene artículos con stock todavía.')}
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button></div>
-  `);
+        <td><button class="btn btn-sm" onclick="editWarehouseStock(${_whDetailWarehouseId}, ${s.article_id}, '${s.description.replace(/'/g, "\\'")}', ${s.quantity}, '${_whDetailName.replace(/'/g, "\\'")}')">Editar</button></td>
+      </tr>`, filtered ? 'Ningún artículo coincide con la búsqueda.' : 'Este depósito no tiene artículos con stock todavía.');
+}
+function filterWarehouseDetail() {
+  const q = (document.getElementById('whDetailFilter').value || '').trim().toLowerCase();
+  const filteredRows = !q ? _whDetailRows : _whDetailRows.filter(s => s.code.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+  document.getElementById('whDetailTableWrap').innerHTML = renderWarehouseDetailTable(filteredRows, true);
 }
 
 async function editWarehouseStock(warehouseId, articleId, name, currentQty, warehouseName) {
@@ -1512,6 +1559,7 @@ async function createWarehouse() {
 // ---------------------------------------------------------
 async function deleteEntity(kind, id, name) {
   if (!confirm(`¿Eliminar "${name}"? Esta acción no se puede deshacer.`)) return;
+  if (!(await verifyPasswordPrompt(`eliminar "${name}"`))) return;
   const REFRESH_BY_KIND = {
     warehouses: refreshWarehouses, suppliers: refreshSuppliers, customers: refreshCustomers,
     projects: refreshProjects, 'cash-boxes': refreshCashBoxes,
@@ -1884,7 +1932,7 @@ async function renderPurchases() {
         <div class="hint" style="margin-bottom:14px">Esta etapa confirma que el pago de la compra ya salió realmente de la caja o sobre elegido.</div>
         ${tableOrEmpty(verifyBU, ['Fecha', 'Compra', 'Proveedor', 'Caja / Sobre origen', 'Monto', ''], (p) => `
           <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
-            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">${svgIcon('warning')} hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td class="mono">#${p.purchase_id}</td>
             <td>${p.supplier_name}</td>
             <td>${p.cash_box_name}</td>
@@ -2554,9 +2602,9 @@ function buildShipmentDocumentHtml({ shipment, customer, business_unit, warehous
 </head>
 <body>
   <div class="actions no-print">
-    <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
-    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el remito #${number} de ${business_unit.name}.`)}" target="_blank">📱 Enviar por WhatsApp</a>` : ''}
-    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`Remito de envío #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el remito de envío #${number} (${reasonLabel}).\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">✉️ Enviar por email</a>` : ''}
+    <button onclick="window.print()">${svgIcon('print')} Imprimir / Guardar PDF</button>
+    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el remito #${number} de ${business_unit.name}.`)}" target="_blank">${svgIcon('whatsapp')} Enviar por WhatsApp</a>` : ''}
+    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`Remito de envío #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el remito de envío #${number} (${reasonLabel}).\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">${svgIcon('mail')} Enviar por email</a>` : ''}
   </div>
 
   <div class="sheet">
@@ -2734,7 +2782,7 @@ async function renderSales() {
         <div class="hint" style="margin-bottom:14px">Los dólares de una conversión bancaria en curso siguen pidiendo esta confirmación aparte. Hasta que se verifique, no afectan el saldo de esa caja.</div>
         ${tableOrEmpty(verifyTrulyPending, ['Fecha', 'Venta', 'Cliente', 'Movimiento', 'Caja / Sobre', 'Monto', ''], (p) => `
           <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
-            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">${svgIcon('warning')} hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td class="mono">#${p.sale_id}</td>
             <td>${p.customer_name}</td>
             <td>${p.direction === 'OUT' ? '<span class="hint">↑ Egreso</span>' : '<span class="hint">↓ Ingreso</span>'}</td>
@@ -3352,7 +3400,7 @@ async function showSaleDetail(saleId) {
   const canCollect = full && full.sale.status === 'CONFIRMED' && remaining > 0.01;
   openModal(`
     <h2>Detalle — Venta #${saleId}</h2>
-    ${bc ? `<div class="hint" style="margin-bottom:14px">💵 Cobrada por conversión bancaria: <strong>$ ${fmtMoney(bc.amount_ars)}</strong> vía ${bc.bank_name} → <strong>US$ ${fmtMoney(bc.usd_equivalent)}</strong>${bc.notes ? ` · ${bc.notes}` : ''}</div>` : ''}
+    ${bc ? `<div class="hint" style="margin-bottom:14px">${svgIcon('dollar')} Cobrada por conversión bancaria: <strong>$ ${fmtMoney(bc.amount_ars)}</strong> vía ${bc.bank_name} → <strong>US$ ${fmtMoney(bc.usd_equivalent)}</strong>${bc.notes ? ` · ${bc.notes}` : ''}</div>` : ''}
     ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad', 'Precio unit.', 'Subtotal'], (i) => `
       <tr>
         <td class="mono">${i.code}</td>
@@ -3466,9 +3514,9 @@ function buildDocumentHtml({ type, sale, customer, business_unit, warehouse, ite
 </head>
 <body>
   <div class="actions no-print">
-    <button class="primary" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
-    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el ${isRemito ? 'remito' : 'comprobante'} #${number} de ${business_unit.name}.`)}" target="_blank">📱 Enviar por WhatsApp</a>` : ''}
-    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`${title} #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el ${isRemito ? 'remito de entrega' : 'comprobante de venta'} #${number}.\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">✉️ Enviar por email</a>` : ''}
+    <button class="primary" onclick="window.print()">${svgIcon('print')} Imprimir / Guardar PDF</button>
+    ${customer.phone ? `<a href="${waLink(customer.phone, `Hola ${customer.name}, te comparto el ${isRemito ? 'remito' : 'comprobante'} #${number} de ${business_unit.name}.`)}" target="_blank">${svgIcon('whatsapp')} Enviar por WhatsApp</a>` : ''}
+    ${customer.email ? `<a href="mailto:${customer.email}?subject=${encodeURIComponent(`${title} #${number} — ${business_unit.name}`)}&body=${encodeURIComponent(`Hola ${customer.name},\n\nTe compartimos el ${isRemito ? 'remito de entrega' : 'comprobante de venta'} #${number}.\nAdjuntá el PDF generado con el botón "Imprimir / Guardar PDF" antes de enviar este correo.\n\nSaludos.`)}">${svgIcon('mail')} Enviar por email</a>` : ''}
   </div>
 
   <div class="sheet">
@@ -4019,7 +4067,7 @@ function confirmDangerous(titleHtml, messageHtml, confirmLabel) {
     overlay.className = 'danger-confirm-overlay';
     overlay.innerHTML = `
       <div class="danger-confirm-box">
-        <div class="danger-confirm-icon">⚠️</div>
+        <div class="danger-confirm-icon">${svgIcon('warning')}</div>
         <div class="danger-confirm-title">${titleHtml}</div>
         <div class="danger-confirm-text">${messageHtml}</div>
         <div class="danger-confirm-actions">
@@ -4039,7 +4087,7 @@ function showStockWarning(messageHtml) {
     overlay.className = 'stock-warning-overlay';
     overlay.innerHTML = `
       <div class="stock-warning-box">
-        <div class="stock-warning-icon">⚠️</div>
+        <div class="stock-warning-icon">${svgIcon('warning')}</div>
         <div class="stock-warning-title">Stock insuficiente</div>
         <div class="stock-warning-text">${messageHtml}</div>
         <div class="stock-warning-actions">
@@ -4185,11 +4233,11 @@ function cashBoxIcon(name, kind) {
   for (const key in logoMap) {
     if (n.includes(key)) return `<img src="${logoMap[key]}" alt="${name}" class="cashbox-tile-logo">`;
   }
-  const emojiMap = { 'inversión': '📈', 'inversion': '📈', 'ganancia': '💹', 'taller': '🔧' };
+  const emojiMap = { 'inversión': 'chart', 'inversion': 'chart', 'ganancia': 'chart', 'taller': 'wrench' };
   for (const key in emojiMap) {
-    if (n.includes(key)) return `<span class="cashbox-tile-emoji">${emojiMap[key]}</span>`;
+    if (n.includes(key)) return `<span class="cashbox-tile-emoji">${svgIcon(emojiMap[key])}</span>`;
   }
-  return `<span class="cashbox-tile-emoji">${kind === 'SOBRE' ? '✉️' : '💰'}</span>`;
+  return `<span class="cashbox-tile-emoji">${svgIcon(kind === 'SOBRE' ? 'mail' : 'cash')}</span>`;
 }
 
 
@@ -4366,7 +4414,7 @@ async function renderFinance() {
         <div class="card-title">Movimientos manuales pendientes de verificación ${pending.length ? `(${pending.length})` : ''}</div>
         ${tableOrEmpty(pending, ['Fecha', 'Tipo', 'Origen', 'Destino', 'Monto', 'Descripción', ''], (p) => `
           <tr ${daysSince(p.created_at) >= 2 ? 'style="background:#FFF3E0"' : ''}>
-            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">⚠️ hace ${daysSince(p.created_at)}d</span>` : ''}</td>
+            <td class="mono">${fmtDate(p.created_at)}${daysSince(p.created_at) >= 2 ? ` <span style="color:#C9820A;font-weight:600">${svgIcon('warning')} hace ${daysSince(p.created_at)}d</span>` : ''}</td>
             <td>${p.kind === 'TRANSFER' ? 'Transferencia' : p.kind === 'INCOME' ? 'Ingreso' : 'Egreso'}</td>
             <td>${p.from_box_name || '-'}</td>
             <td>${p.to_box_name || '-'}</td>
@@ -4843,6 +4891,8 @@ let usersSubTab = 'list';
 let activityLogPage = 1;
 let activityLogDateFrom = '';
 let activityLogDateTo = '';
+let activityLogShowTechnical = false;
+function activityLogToggleTechnical() { activityLogShowTechnical = !activityLogShowTechnical; renderView(); }
 
 async function renderUsers() {
   document.getElementById('viewActions').innerHTML = usersSubTab === 'list'
@@ -4870,15 +4920,15 @@ async function renderUsers() {
             <span class="hint">a</span>
             <input type="date" id="activityLogDateTo" value="${activityLogDateTo}" onchange="activityLogApplyDateFilter()">
             ${(activityLogDateFrom || activityLogDateTo) ? `<button class="btn btn-sm" onclick="activityLogClearDateFilter()">Limpiar</button>` : ''}
+            <button class="btn btn-sm" onclick="activityLogToggleTechnical()">${activityLogShowTechnical ? 'Ocultar' : 'Mostrar'} detalles técnicos</button>
           </div>
         </div>
-        ${tableOrEmpty(logs, ['Fecha', 'Usuario', 'Acción', 'Ruta', 'Detalle'], (l) => `
+        ${tableOrEmpty(logs, activityLogShowTechnical ? ['Fecha', 'Usuario', 'Detalle', 'Acción', 'Ruta'] : ['Fecha', 'Usuario', 'Detalle'], (l) => `
           <tr>
             <td class="mono">${fmtDate(l.created_at)}</td>
             <td>${l.username}</td>
-            <td class="mono">${l.method}</td>
-            <td class="mono">${l.path}</td>
             <td>${l.summary || '-'}</td>
+            ${activityLogShowTechnical ? `<td class="mono">${l.method}</td><td class="mono">${l.path}</td>` : ''}
           </tr>`, 'Sin actividad registrada todavía.')}
         ${total ? paginationControlsHtml('activityLog', activityLogPage, total, limit) : ''}
       </div>`;
@@ -5076,6 +5126,7 @@ async function toggleUser(id) {
 }
 async function deleteUser(id, username) {
   if (!confirm(`¿Eliminar el usuario ${username}?`)) return;
+  if (!(await verifyPasswordPrompt(`eliminar el usuario ${username}`))) return;
   try { await api(`/users/${id}`, { method: 'DELETE' }); toast('Usuario eliminado.'); renderView(); } catch (e) { toast(e.message, 'error'); }
 }
 
