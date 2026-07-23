@@ -2642,11 +2642,14 @@ app.get('/search/global', async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
     if (q.length < 2) {
-      return res.json({ customers: [], suppliers: [], articles: [], sales: [], purchases: [] });
+      return res.json({
+        customers: [], suppliers: [], articles: [], sales: [], purchases: [],
+        quotes: [], shipments: [], projects: [], warehouses: [],
+      });
     }
     const like = `%${q}%`;
 
-    const [customersR, suppliersR, articlesR, salesR, purchasesR] = await Promise.all([
+    const [customersR, suppliersR, articlesR, salesR, purchasesR, quotesR, shipmentsR, projectsR, warehousesR] = await Promise.all([
       pool.query(
         `SELECT id, name, tax_id FROM customer
          WHERE deleted_at IS NULL AND (name ILIKE $1 OR tax_id ILIKE $1)
@@ -2686,6 +2689,42 @@ app.get('/search/global', async (req, res) => {
          ORDER BY p.id DESC LIMIT 5`,
         [like]
       ),
+      // (Roadmap Etapa 3) Antes el buscador global no cubría estas 4 entidades.
+      // Mismo patrón que Ventas/Compras: ILIKE + LIMIT 5.
+      pool.query(
+        `SELECT q.id, q.total_amount, q.currency, q.status, q.business_unit_id, bu.name AS business_unit_name,
+                c.name AS customer_name
+         FROM quote q
+         JOIN business_unit bu ON bu.id = q.business_unit_id
+         LEFT JOIN customer c ON c.id = q.customer_id
+         WHERE q.deleted_at IS NULL AND (CAST(q.id AS TEXT) ILIKE $1 OR c.name ILIKE $1)
+         ORDER BY q.id DESC LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT sh.id, sh.status, sh.business_unit_id, bu.name AS business_unit_name,
+                c.name AS customer_name
+         FROM shipment sh
+         JOIN business_unit bu ON bu.id = sh.business_unit_id
+         LEFT JOIN customer c ON c.id = sh.customer_id
+         WHERE sh.deleted_at IS NULL AND (CAST(sh.id AS TEXT) ILIKE $1 OR c.name ILIKE $1)
+         ORDER BY sh.id DESC LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT pr.id, pr.name, pr.business_unit_id, bu.name AS business_unit_name
+         FROM project pr JOIN business_unit bu ON bu.id = pr.business_unit_id
+         WHERE pr.deleted_at IS NULL AND pr.name ILIKE $1
+         ORDER BY pr.name LIMIT 5`,
+        [like]
+      ),
+      pool.query(
+        `SELECT w.id, w.name, w.business_unit_id, bu.name AS business_unit_name
+         FROM warehouse w JOIN business_unit bu ON bu.id = w.business_unit_id
+         WHERE w.deleted_at IS NULL AND w.name ILIKE $1
+         ORDER BY w.name LIMIT 5`,
+        [like]
+      ),
     ]);
 
     res.json({
@@ -2694,6 +2733,10 @@ app.get('/search/global', async (req, res) => {
       articles: articlesR.rows,
       sales: salesR.rows,
       purchases: purchasesR.rows,
+      quotes: quotesR.rows,
+      shipments: shipmentsR.rows,
+      projects: projectsR.rows,
+      warehouses: warehousesR.rows,
     });
   } catch (e) {
     res.status(400).json({ error: e.message });

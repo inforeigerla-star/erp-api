@@ -356,6 +356,11 @@ const GLOBAL_SEARCH_SECTIONS = [
   ['customers', 'Clientes', (c) => `<span class="global-search-title">${c.name}</span><span class="global-search-sub">${c.tax_id || 'Sin CUIT'}</span>`],
   ['suppliers', 'Proveedores', (s) => `<span class="global-search-title">${s.name}</span><span class="global-search-sub">${s.tax_id || 'Sin CUIT'}</span>`],
   ['articles', 'Artículos', (a) => `<span class="global-search-title">${a.code}${a.alt_code ? ' · ' + a.alt_code : ''}</span><span class="global-search-sub">${a.description} · ${a.business_unit_name}</span>`],
+  // (Roadmap Etapa 3) Antes el buscador global no cubría estas 4 entidades.
+  ['quotes', 'Presupuestos', (q) => `<span class="global-search-title">Presupuesto #${q.id}</span><span class="global-search-sub">${q.customer_name || 'Sin cliente'} · ${q.currency === 'USD' ? 'US$' : '$'} ${fmtMoney(q.total_amount)} · ${q.business_unit_name}</span>`],
+  ['shipments', 'Remitos de envío', (s) => `<span class="global-search-title">Remito #${s.id}</span><span class="global-search-sub">${s.customer_name || 'Sin cliente'} · ${s.business_unit_name}</span>`],
+  ['projects', 'Proyectos', (p) => `<span class="global-search-title">${p.name}</span><span class="global-search-sub">${p.business_unit_name}</span>`],
+  ['warehouses', 'Depósitos', (w) => `<span class="global-search-title">${w.name}</span><span class="global-search-sub">${w.business_unit_name}</span>`],
 ];
 
 // El dropdown vive fuera del topbar (que tiene overflow:hidden para recortar
@@ -419,9 +424,21 @@ function selectGlobalSearchResult(kind, idx) {
     goToView('sales', () => showSaleDetail(item.id));
   } else if (kind === 'purchases') {
     switchBUIfNeeded();
-    goToView('purchases', () => {
-      toast(`Compra #${item.id} · ${item.supplier_name || 'Sin proveedor'} · $ ${fmtMoney(item.total_amount)} · ${statusLabel(item.status)}. Buscala en la lista para gestionarla.`);
-    });
+    // (Roadmap Etapa 3) Antes solo mostraba un cartel con el resumen, porque
+    // Compras no tenía modal de Detalle. Ahora abre igual que Ventas.
+    goToView('purchases', () => showPurchaseDetail(item.id));
+  } else if (kind === 'quotes') {
+    switchBUIfNeeded();
+    goToView('quotes', () => showQuoteDetail(item.id));
+  } else if (kind === 'shipments') {
+    switchBUIfNeeded();
+    goToView('shipments', () => showShipmentDetail(item.id));
+  } else if (kind === 'projects') {
+    switchBUIfNeeded();
+    goToView('projects', () => openEditProjectModal(item.id, item.name));
+  } else if (kind === 'warehouses') {
+    switchBUIfNeeded();
+    goToView('warehouses', () => openEditWarehouseModal(item.id, item.name));
   }
 }
 
@@ -1864,6 +1881,7 @@ async function renderPurchases() {
           <td>${p.payment_type === 'CASH' ? 'Contado' : 'Cta. Cte.'}</td>
           <td class="num expense">$ ${fmtMoney(p.total_amount)}</td>
           <td style="text-align:right;white-space:nowrap">
+            <button class="btn btn-sm" onclick="showPurchaseDetail(${p.id})">Detalle</button>
             ${(p.status === 'CONFIRMED' && (Number(p.total_amount) - Number(p.settled_amount || 0)) > 0.01) ? `<button class="btn btn-sm btn-primary" onclick="openPayModal(${p.id}, ${Number(p.total_amount) - Number(p.settled_amount || 0)})">Procesar pago</button>` : ''}
             ${rowActionsMenu(`purchase_${p.id}`, purchaseRowMenuItems(p))}
           </td>
@@ -1894,14 +1912,39 @@ function supplierName(id) {
   return state.cache.suppliers.find(s => s.id === id)?.name || `Proveedor #${id}`;
 }
 // Mismo criterio que saleRowMenuItems: agrupa lo menos frecuente en el "⋮",
-// deja "Procesar pago" (cuando corresponde) como botón visible porque es la
-// acción más usada acá — Compras no tiene modal de Detalle (ver Bloque 4 de
-// Cobros y pagos, sección 13), así que no hay un botón equivalente a "Detalle".
+// deja "Detalle" y "Procesar pago" (cuando corresponde) como botones visibles.
+// (Roadmap Etapa 3) Compras ya tiene modal de Detalle, igual que Ventas — ver
+// showPurchaseDetail().
 function purchaseRowMenuItems(p) {
   return [
     ...opActionsItems('purchases', p),
     { label: 'Eliminar', onclick: `deleteOperation('purchases', ${p.id})`, danger: true },
   ];
+}
+// (Roadmap Etapa 3) Nuevo — paridad con showSaleDetail(). Reutiliza
+// /purchases/:id/full, que ya existía (Bloque 2, edición) y ya trae los
+// ítems con código/descripción/subtotal.
+async function showPurchaseDetail(purchaseId) {
+  const full = await api(`/purchases/${purchaseId}/full`).catch(() => null);
+  if (!full) { toast('No se pudo cargar la compra.', 'error'); return; }
+  const { purchase, items } = full;
+  const remaining = Number(purchase.total_amount) - Number(purchase.settled_amount || 0);
+  const canPay = purchase.status === 'CONFIRMED' && remaining > 0.01;
+  openModal(`
+    <h2>Detalle — Compra #${purchaseId}</h2>
+    ${tableOrEmpty(items, ['Código', 'Artículo', 'Cantidad', 'Costo unit.', 'Subtotal'], (i) => `
+      <tr>
+        <td class="mono">${i.code}</td>
+        <td>${i.description}</td>
+        <td class="num">${fmtQty(i.quantity)}</td>
+        <td class="num">$ ${fmtMoney(i.unit_cost)}</td>
+        <td class="num expense">$ ${fmtMoney(i.subtotal)}</td>
+      </tr>`, 'Sin artículos registrados en esta compra.')}
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cerrar</button>
+      ${canPay ? `<button class="btn btn-primary" onclick="openPayModal(${purchaseId}, ${remaining})">Procesar pago</button>` : ''}
+    </div>
+  `);
 }
 function paymentStatusBadge(status) {
   const map = { PENDIENTE: 'pending', PARCIAL: 'pending', PAGADO: 'confirmed' };
